@@ -1,0 +1,13 @@
+componente,medidas_mm,notas,fuente
+"Raspberry Pi 4 Model B 4GB","85 x 56","Dimensiones de la placa base; la altura depende de conectores y componentes montados.","https://datasheets.raspberrypi.com/rpi4/raspberry-pi-4-product-brief.pdf"
+"Memoria MicroSD Kingston 32GB (Clase 10)","11 x 15 x 1","Formato fisico microSD estandar indicado por Kingston.","https://www.kingston.com/datasheets/SDCIT-specsheet-8gb-32gb_en.pdf"
+"Camara Raspberry Pi v2 - 8 Megapixels","25 x 24 x 9","Medida aproximada del modulo segun documentacion oficial.","https://www.raspberrypi.com/documentation/hardware/camera/picam/"
+"Cable para camara Raspberry Pi - 30cm","300 x 16","Cable flexible FFC de 300 mm de largo y 16 mm de ancho.","https://www.adafruit.com/product/1648"
+"Controlador de motores DRV8835 para Raspberry Pi B+","43.18 x 16.51","Medida de la PCB observada en la imagen tecnica del fabricante (1.7 x 0.65 pulgadas).","https://www.pololu.com/product/2753"
+"Rueda loca plastico ABS 3/4","19.05 diametro bola; 22.35 alto","Bola de 3/4 pulgada y altura total sin separadores de 0.88 pulgadas.","https://www.pololu.com/product/954"
+"Array de sensores infrarrojos QTR-8RC (Digital)","74.93 x 12.7 x 3.18","Sin pines soldados.","https://www.pololu.com/product-info-merged/961"
+"Motor Micro Metal LP con reductora 30:1","10 x 12 x 25","Caja reductora 10 x 12 mm y cuerpo de 25 mm; eje D de 3 mm diametro y 9 mm de largo.","https://www.pololu.com/product-info-merged/993"
+"Rueda de goma 32x7mm (2 und)","32 x 7","Diametro x ancho de cada rueda.","https://www.pololu.com/product/1088"
+"Bateria Lipo 2000mAh / 3.7V","5.6 x 49.2 x 68.8","Medidas indicadas por SparkFun para el modelo PRT-13855.","https://www.sparkfun.com/products/13855"
+"Cargador de bateria LiPo USB y DC","35.56 x 38.1","Dimension de la PCB obtenida del archivo oficial de diseno Eagle.","https://github.com/sparkfun/USB_LiPolyCharger_SingleCell"
+"Conversor DC ajustable 4-25V","10.7 x 22.4 x 5.8","Tamano del regulador sin headers.","https://www.pololu.com/product/799/specs"
