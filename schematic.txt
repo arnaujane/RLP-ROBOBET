@@ -1,0 +1,299 @@
++9V_BAT
+
++3V3
+
+12
+
+J1Portapilas6xAA
+
+GND
+
+son 3,3V de salida del dev board sirven para alimentar los infrarojos.
+
+2
+
+SW1 BUTTON
+
+1
+
+R1 10K
+GND
+
+QTR_S1 QTR_S2 QTR_S3 QTR_S4 QTR_S5 QTR_S6 QTR_S7
+
+QTR_S8
+
+U1
+
+U7
+
+ESP32_WROOM_Dev_Board
+
+ESP32-WROOM
+
+Dev Board
+
+3V3
+
+GND
+
+EN
+
+IO23
+
+SVP
+
+IO22
+
+SVN
+
+TXD0
+
+IO34
+
+RXD0
+
+IO35
+
+IO21
+
+IO32
+
+GND
+
+IO33
+
+IO19
+
+IO25
+
+IO18
+
+IO26
+
+IO5
+
+IO27
+
+IO17
+
+IO14
+
+IO16
+
+IO12
+
+IO4
+
+GND
+
+IO0
+
+IO13
+
+IO2
+
+SD2
+
+IO15
+
+SD3
+
+SD1
+
+CMD
+
+SD0
+
+5V
+
+CLK
+
+ESP32_AZ
+
+GND
+MOTOR_IZQ_PWM MOTOR_IZQ_IN1 TRANSMTOCAM TRANSMTODEVBOARD MOTOR_IZQ_IN2
+MOTOR_DER_PWM MOTOR_DER_IN1
+MOTOR_DER_IN2
+
++5V
+
++5V
+
+J2_Powerbank_5V
+
+1 2
+
+5V GND
+
+GND
+
+La asignación de pines se ha elegido priorizando el orden físico del cableado y la facilidad de montaje. El pin IO12 se utiliza como entrada/salida para el sensor QTR-8RC, evitando conexiones externas que fuercen su estado durante el arranque.
+
+El portapilas de 9 V alimenta la etapa de potencia de motores. La powerbank de 5 V alimenta la electrónica de control. No unir +9V_BAT con +5V. Todas las masas GND estan todas conectadas internamente con una es suficiente
+
+Schematic
+Board Drawn Reviewed
+
+Schematic1
+Board1
+
+Create at Update at Page
+
+2026-05-07
+2026-05-08 P1_Controlador_Alime ntacion
+
+ROBOBET_Esquema_Electrico
+
+Version
+
+Size
+
+V1.0
+
+A4
+
+Page 1 Total 4 EasyEDA.com
+
+U2
+
+1 2 3 4 5 6 7 8
+
+IO4 IO2 IO14 IO15 IO13 IO12 GND 5V
+
+GND U0T U0R VCC GND IO0 IO16 3V3
+
+16 15 14 13 12 11 10 9
+
+ESP32-CAM
+
+TRANSMTODEVBOARD TRANSMTOCAM
+
+GND
+
++5V La ESP32-CAM se alimenta desde la powerbank de 5 V y se comunica con el servidor mediante WiFi.
+
+Schematic
+Board Drawn Reviewed
+
+Schematic1
+Board1
+
+Create at Update at Page
+
+2026-05-08
+2026-05-08 P2_Camara_ESP32C AM
+
+ROBOBET_Esquema_Electrico
+
+Version
+
+Size
+
+V1.0
+
+A4
+
+Page 2 Total 4 EasyEDA.com
+
+el ledon nos puede servir para que los leds no brillen tanto (asi como resumen del datasheet)
+
+QTR-8RC
+
+SEN1
+Vcc
+1 2 3 4 5 6 7 8
+LEDON
+GND
+
++3V3
+
+GND
+
+QTR_S1 QTR_S2 QTR_S3 QTR_S4 QTR_S5 QTR_S6 QTR_S7 QTR_S8
+
+El QTR-8RC se alimenta a 3,3 V para mantener compatibilidad lógica con el ESP32. LEDON queda conectado a +3V3 para mantener activos los emisores IR.
+
+Schematic
+Board Drawn Reviewed
+
+Schematic1
+Board1
+
+Create at Update at Page
+
+2026-05-08
+2026-05-08 P3_Sensor_Linea_QT R8RC
+
+ROBOBET_Esquema_Electrico
+
+Version
+
+Size
+
+V1.0
+
+A4
+
+Page 3 Total 4 EasyEDA.com
+
+MotorIZQ 1 2
+
+Motor
+
+MotorDER
+
+2 1
+
+2 1
+
+Motor
+
++9V_BAT
+
+HW-166TB6612FNG
+
++3V3
+
+1 2 3 4 5 6 7 8
+
+VM VCC GND A01 A02 B02 B01 GND
+
+PWMA AIN2 AIN1 Stby BIN1 BIN2
+PWMB TB6612FNG GND
+
+9 10 11 12 13 14 15 16
+
+HW-166
+
+GND
+
++3V3
+
+MOTOR_IZQ_PWM MOTOR_IZQ_IN2 MOTOR_IZQ_IN1
+MOTOR_DER_IN1 MOTOR_DER_IN2 MOTOR_DER_PWM
+
+Schematic
+Board Drawn Reviewed
+
+Schematic1
+Board1
+
+Create at Update at Page
+
+2026-05-08
+2026-05-18 P4_Driver_Motores_D C
+
+ROBOBET_Esquema_Electrico
+
+Version
+
+Size
+
+V1.0
+
+A4
+
+Page 4 Total 4 EasyEDA.com
+
+
