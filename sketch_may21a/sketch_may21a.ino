@@ -73,23 +73,26 @@ void testMotors() {
   Serial.println("Motor izquierdo adelante");
   setMotor(MOTOR_IZQ_PWM_PIN, MOTOR_IZQ_IN1_PIN, MOTOR_IZQ_IN2_PIN, 180);
   setMotor(MOTOR_DER_PWM_PIN, MOTOR_DER_IN1_PIN, MOTOR_DER_IN2_PIN, 0);
-  delay(1000);
+  delay(1500);
+
+  stopMotors();
+  delay(500);
 
   Serial.println("Motor derecho adelante");
-  stopMotors();
-  delay(500);
   setMotor(MOTOR_IZQ_PWM_PIN, MOTOR_IZQ_IN1_PIN, MOTOR_IZQ_IN2_PIN, 0);
   setMotor(MOTOR_DER_PWM_PIN, MOTOR_DER_IN1_PIN, MOTOR_DER_IN2_PIN, 180);
-  delay(1000);
+  delay(1500);
 
-  Serial.println("Ambos motores atras");
   stopMotors();
   delay(500);
+
+  Serial.println("Ambos motores atras");
   setMotor(MOTOR_IZQ_PWM_PIN, MOTOR_IZQ_IN1_PIN, MOTOR_IZQ_IN2_PIN, -180);
   setMotor(MOTOR_DER_PWM_PIN, MOTOR_DER_IN1_PIN, MOTOR_DER_IN2_PIN, -180);
-  delay(1000);
+  delay(1500);
 
   stopMotors();
+  delay(1500);
 }
 
 void setup() {
@@ -112,5 +115,4 @@ void loop() {
   Serial.println(infraredValue);
 
   testMotors();
-  delay(1500);
 }
