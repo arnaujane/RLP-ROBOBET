@@ -1,0 +1,332 @@
+:root {
+  --bg: #f3f6f7;
+  --panel: #ffffff;
+  --ink: #172026;
+  --muted: #60717c;
+  --line: #d9e1e5;
+  --accent: #0b7c75;
+  --accent-2: #b74228;
+  --ok: #16834f;
+  --warn: #b87900;
+  --shadow: 0 10px 24px rgba(31, 47, 56, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  padding: 18px 24px;
+  background: #172026;
+  color: #fff;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 750;
+}
+
+h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+h3 {
+  margin-top: 18px;
+  font-size: 14px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.topbar p {
+  margin-top: 4px;
+  color: #b9c8ce;
+}
+
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: max-content;
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #87959b;
+}
+
+.dot.online {
+  background: var(--ok);
+}
+
+.layout {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.media-grid,
+.status-grid,
+.interaction-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.media-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.status-grid {
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 1fr);
+}
+
+.interaction-grid {
+  grid-template-columns: 320px minmax(320px, 1fr) minmax(360px, 1.2fr);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.video-panel {
+  min-width: 0;
+}
+
+.url-input,
+input,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 38px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.video-box {
+  margin-top: 12px;
+  aspect-ratio: 16 / 9;
+  background: #0c1215;
+  border-radius: 6px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.video-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  min-height: 38px;
+  padding: 0 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #42515a;
+}
+
+button.danger {
+  background: var(--accent-2);
+}
+
+button.small {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.telemetry {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.telemetry dt {
+  color: var(--muted);
+}
+
+.telemetry dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.control-row,
+.bet-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.control-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.button-grid,
+.poll-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.poll-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.active-user {
+  margin-top: 12px;
+  padding: 10px;
+  background: #ecf5f4;
+  border-radius: 6px;
+  color: #0b605b;
+  font-weight: 750;
+}
+
+.ranking,
+.list {
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
+.ranking li,
+.list li {
+  margin: 8px 0;
+}
+
+.polls {
+  display: grid;
+  gap: 12px;
+}
+
+.poll {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.poll-title {
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.poll-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.poll-options button {
+  background: #42515a;
+}
+
+.poll footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.message {
+  min-height: 22px;
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.log-panel pre {
+  min-height: 160px;
+  max-height: 300px;
+  overflow: auto;
+  background: #0c1215;
+  color: #c8f2ed;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+@media (max-width: 1050px) {
+  .media-grid,
+  .status-grid,
+  .interaction-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .control-row,
+  .button-grid,
+  .bet-form,
+  .poll-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
