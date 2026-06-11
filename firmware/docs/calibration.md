@@ -14,6 +14,14 @@ Si la linea se detecta mal:
 - Revisa altura del QTR respecto al suelo.
 - Evita luz directa fuerte sobre el sensor.
 
+Diagnostico sin mover motores:
+
+- Abre `http://IP_ROBOT/qtr-debug`.
+- `raw_us` debe bajar claramente sobre blanco.
+- En linea negra normal solo deberian subir los sensores que esten sobre la linea.
+- En mancha negra ancha deberian subir 7/8 u 8/8 sensores.
+- Si todos quedan en `3000` tambien sobre blanco, revisar alimentacion, GND, LEDON, altura y cables de senal.
+
 ## Motores
 
 Prueba primero con el robot levantado:

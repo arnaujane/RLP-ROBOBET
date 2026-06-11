@@ -62,8 +62,11 @@ Si algun motor gira al reves, cambia los terminales del motor o modifica `INVERT
 - Alimentacion: `5V` y `GND`.
 - Stream: `http://IP_CAM/stream`.
 - Estado: `http://IP_CAM/status`.
-- UART:
-  - Envia `GREEN_SIGN`, `RED_SIGN` o `NO_SIGN` al ESP32-WROOM.
+- Deteccion HTTP: `http://192.168.4.2/detect` cuando esta conectada al AP del robot.
+- UART final:
+  - Robot envia `DETECT`.
+  - Camara responde `GREEN_SIGN`, `RED_SIGN`, `BLACK_SIGN` o `NO_SIGN`.
+  - `GND` debe ser comun entre ESP32-WROOM y ESP32-CAM.
 
 ## Camara Cenital
 

@@ -14,6 +14,26 @@
 #define WIFI_PASSWORD "ROBOBET_PASS"
 #endif
 
+#ifndef CAMERA_USE_STATIC_IP
+#define CAMERA_USE_STATIC_IP 1
+#endif
+
+#ifndef CAMERA_STATIC_IP
+#define CAMERA_STATIC_IP "192.168.4.2"
+#endif
+
+#ifndef CAMERA_GATEWAY_IP
+#define CAMERA_GATEWAY_IP "192.168.4.1"
+#endif
+
+#ifndef CAMERA_SUBNET_MASK
+#define CAMERA_SUBNET_MASK "255.255.255.0"
+#endif
+
+#ifndef CAMERA_SERIAL_REPORTS
+#define CAMERA_SERIAL_REPORTS 0
+#endif
+
 // AI Thinker ESP32-CAM pinout.
 #define PWDN_GPIO_NUM 32
 #define RESET_GPIO_NUM -1
@@ -33,30 +53,64 @@
 #define PCLK_GPIO_NUM 22
 
 static constexpr uint32_t SIGN_REPORT_INTERVAL_MS = 400;
-static constexpr uint16_t MIN_SIGN_PIXELS = 75;
+static constexpr uint8_t DETECT_SAMPLE_COUNT = 5;
+static constexpr uint32_t DETECT_SAMPLE_DELAY_MS = 90;
+static constexpr uint32_t DETECT_FIRST_SAMPLE_DELAY_MS = 35;
+static constexpr uint32_t BACKGROUND_DETECT_INTERVAL_MS = 250;
+static constexpr uint8_t ROI_LEFT_PERCENT = 20;
+static constexpr uint8_t ROI_RIGHT_PERCENT = 80;
+static constexpr uint8_t ROI_TOP_PERCENT = 15;
+static constexpr uint8_t ROI_BOTTOM_PERCENT = 85;
+static constexpr uint8_t ROI_SAMPLE_STEP = 3;
+static constexpr uint8_t MIN_COLOR_PERCENT = 2;
+static constexpr uint8_t MIN_BLACK_PERCENT = 10;
+static constexpr uint8_t DOMINANCE_MARGIN_PERCENT = 30;
 
 WebServer server(80);
 
 String lastSign = "NO_SIGN";
 String networkMode = "booting";
 uint32_t lastSignReportMs = 0;
+uint32_t lastBackgroundDetectMs = 0;
 uint32_t frameCounter = 0;
 uint32_t lastFpsWindowMs = 0;
 float fps = 0.0f;
-uint16_t lastRedPixels = 0;
-uint16_t lastGreenPixels = 0;
+uint32_t lastRedPixels = 0;
+uint32_t lastGreenPixels = 0;
+uint32_t lastBlackPixels = 0;
+uint32_t lastSampledPixels = 0;
+uint8_t lastConfidence = 0;
+uint8_t lastSampleCount = 1;
+uint8_t lastRedVotes = 0;
+uint8_t lastGreenVotes = 0;
+uint8_t lastBlackVotes = 0;
+uint8_t lastNoSignVotes = 0;
+String lastReason = "booting";
 
 struct ColorStats {
-  uint16_t red = 0;
-  uint16_t green = 0;
+  uint32_t red = 0;
+  uint32_t green = 0;
+  uint32_t black = 0;
+  uint32_t sampled = 0;
+};
+
+struct DetectionResult {
+  String sign = "NO_SIGN";
+  uint8_t confidence = 0;
+  String reason = "no_result";
+  ColorStats stats;
 };
 
 void reportSign(bool force = false) {
+#if CAMERA_SERIAL_REPORTS
   if (!force && millis() - lastSignReportMs < SIGN_REPORT_INTERVAL_MS) {
     return;
   }
   lastSignReportMs = millis();
   Serial.println(lastSign);
+#else
+  (void)force;
+#endif
 }
 
 ColorStats analyzeFrame(camera_fb_t *fb) {
@@ -66,40 +120,131 @@ ColorStats analyzeFrame(camera_fb_t *fb) {
   }
 
   const uint16_t *pixels = reinterpret_cast<const uint16_t *>(fb->buf);
-  const size_t count = fb->len / 2;
-  for (size_t i = 0; i < count; i += 12) {
-    uint16_t p = pixels[i];
-    uint8_t r = ((p >> 11) & 0x1F) * 255 / 31;
-    uint8_t g = ((p >> 5) & 0x3F) * 255 / 63;
-    uint8_t b = (p & 0x1F) * 255 / 31;
+  const uint16_t width = fb->width;
+  const uint16_t height = fb->height;
+  const uint16_t xStart = (width * ROI_LEFT_PERCENT) / 100;
+  const uint16_t xEnd = (width * ROI_RIGHT_PERCENT) / 100;
+  const uint16_t yStart = (height * ROI_TOP_PERCENT) / 100;
+  const uint16_t yEnd = (height * ROI_BOTTOM_PERCENT) / 100;
 
-    bool red = r > 115 && r > g + 35 && r > b + 35;
-    bool green = g > 105 && g > r + 30 && g > b + 30;
-    if (red) {
-      stats.red++;
-    }
-    if (green) {
-      stats.green++;
+  for (uint16_t y = yStart; y < yEnd; y += ROI_SAMPLE_STEP) {
+    for (uint16_t x = xStart; x < xEnd; x += ROI_SAMPLE_STEP) {
+      const size_t i = static_cast<size_t>(y) * width + x;
+      uint16_t p = pixels[i];
+      uint8_t r = ((p >> 11) & 0x1F) * 255 / 31;
+      uint8_t g = ((p >> 5) & 0x3F) * 255 / 63;
+      uint8_t b = (p & 0x1F) * 255 / 31;
+
+      uint8_t maxChannel = max(r, max(g, b));
+      uint8_t minChannel = min(r, min(g, b));
+      uint16_t brightness = static_cast<uint16_t>(r) + g + b;
+      bool saturatedEnough = maxChannel > minChannel + 28;
+
+      bool red = r > 90 && saturatedEnough && r * 100 > g * 145 && r * 100 > b * 145;
+      bool green = g > 85 && saturatedEnough && g * 100 > r * 140 && g * 100 > b * 135;
+      bool black = brightness < 145 && maxChannel < 65;
+      if (red) {
+        stats.red++;
+      }
+      if (green) {
+        stats.green++;
+      }
+      if (black) {
+        stats.black++;
+      }
+      stats.sampled++;
     }
   }
   return stats;
 }
 
-void updateSign(camera_fb_t *fb) {
+uint8_t percentOf(uint32_t value, uint32_t total) {
+  if (total == 0) {
+    return 0;
+  }
+  return static_cast<uint8_t>(min<uint32_t>(100, (value * 100) / total));
+}
+
+uint8_t confidenceFromPercent(uint8_t percent, uint8_t minimumPercent) {
+  if (percent <= minimumPercent) {
+    return 0;
+  }
+  return static_cast<uint8_t>(constrain(map(percent, minimumPercent, 25, 45, 100), 0, 100));
+}
+
+bool dominates(uint32_t value, uint32_t other) {
+  return value * 100 > other * (100 + DOMINANCE_MARGIN_PERCENT);
+}
+
+DetectionResult classifySign(const ColorStats &stats) {
+  DetectionResult result;
+  result.stats = stats;
+
+  if (stats.sampled == 0) {
+    result.reason = "no_pixels";
+    return result;
+  }
+
+  uint8_t redPercent = percentOf(stats.red, stats.sampled);
+  uint8_t greenPercent = percentOf(stats.green, stats.sampled);
+  uint8_t blackPercent = percentOf(stats.black, stats.sampled);
+
+  bool blackStrong = blackPercent >= MIN_BLACK_PERCENT && stats.black > (stats.red + stats.green) * 2;
+  bool redStrong = redPercent >= MIN_COLOR_PERCENT && dominates(stats.red, stats.green) && stats.red > stats.black;
+  bool greenStrong = greenPercent >= MIN_COLOR_PERCENT && dominates(stats.green, stats.red) && stats.green > stats.black;
+
+  if (blackStrong) {
+    result.sign = "BLACK_SIGN";
+    result.confidence = confidenceFromPercent(blackPercent, MIN_BLACK_PERCENT);
+    result.reason = "black_roi_dominant";
+    return result;
+  }
+
+  if (redStrong && !greenStrong) {
+    result.sign = "RED_SIGN";
+    result.confidence = confidenceFromPercent(redPercent, MIN_COLOR_PERCENT);
+    result.reason = "red_roi_dominant";
+    return result;
+  }
+
+  if (greenStrong && !redStrong) {
+    result.sign = "GREEN_SIGN";
+    result.confidence = confidenceFromPercent(greenPercent, MIN_COLOR_PERCENT);
+    result.reason = "green_roi_dominant";
+    return result;
+  }
+
+  if (redStrong && greenStrong) {
+    result.sign = redPercent >= greenPercent ? "RED_SIGN" : "GREEN_SIGN";
+    result.confidence = confidenceFromPercent(max(redPercent, greenPercent), MIN_COLOR_PERCENT) / 2;
+    result.reason = "mixed_color_low_confidence";
+    return result;
+  }
+
+  result.reason = "below_threshold";
+  return result;
+}
+
+String updateSign(camera_fb_t *fb) {
   ColorStats stats = analyzeFrame(fb);
   lastRedPixels = stats.red;
   lastGreenPixels = stats.green;
+  lastBlackPixels = stats.black;
+  lastSampledPixels = stats.sampled;
 
-  String detected = "NO_SIGN";
-  if (stats.red >= MIN_SIGN_PIXELS && stats.red > stats.green) {
-    detected = "RED_SIGN";
-  } else if (stats.green >= MIN_SIGN_PIXELS) {
-    detected = "GREEN_SIGN";
-  }
-
+  DetectionResult result = classifySign(stats);
+  String detected = result.sign;
   bool changed = detected != lastSign;
   lastSign = detected;
+  lastConfidence = result.confidence;
+  lastReason = result.reason;
+  lastSampleCount = 1;
+  lastRedVotes = detected == "RED_SIGN" ? 1 : 0;
+  lastGreenVotes = detected == "GREEN_SIGN" ? 1 : 0;
+  lastBlackVotes = detected == "BLACK_SIGN" ? 1 : 0;
+  lastNoSignVotes = detected == "NO_SIGN" ? 1 : 0;
   reportSign(changed);
+  return detected;
 }
 
 void updateFps() {
@@ -111,6 +256,140 @@ void updateFps() {
     frameCounter = 0;
     lastFpsWindowMs = now;
   }
+}
+
+bool captureAndUpdateSign(String *detected = nullptr) {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    return false;
+  }
+
+  String sign = updateSign(fb);
+  updateFps();
+  esp_camera_fb_return(fb);
+
+  if (detected != nullptr) {
+    *detected = sign;
+  }
+  return true;
+}
+
+bool captureJpeg(uint8_t **jpg, size_t *jpgLen) {
+  *jpg = nullptr;
+  *jpgLen = 0;
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    return false;
+  }
+
+  updateSign(fb);
+  updateFps();
+
+  bool ok = frame2jpg(fb, 78, jpg, jpgLen);
+  esp_camera_fb_return(fb);
+  return ok && *jpg != nullptr && *jpgLen > 0;
+}
+
+void discardStaleFrame() {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb) {
+    esp_camera_fb_return(fb);
+  }
+}
+
+String chooseSignFromVotes(uint8_t redVotes, uint8_t greenVotes, uint8_t blackVotes, uint8_t noSignVotes) {
+  if (blackVotes >= 3 && blackVotes > redVotes && blackVotes > greenVotes && blackVotes > noSignVotes) {
+    return "BLACK_SIGN";
+  }
+  if (redVotes >= 3 && redVotes > greenVotes && redVotes > blackVotes && redVotes > noSignVotes) {
+    return "RED_SIGN";
+  }
+  if (greenVotes >= 3 && greenVotes > redVotes && greenVotes > blackVotes && greenVotes > noSignVotes) {
+    return "GREEN_SIGN";
+  }
+  return "NO_SIGN";
+}
+
+String detectSignFromSamples() {
+  uint8_t redVotes = 0;
+  uint8_t greenVotes = 0;
+  uint8_t blackVotes = 0;
+  uint8_t noSignVotes = 0;
+  uint16_t confidenceSum = 0;
+  String reason = "votes";
+
+  discardStaleFrame();
+  delay(DETECT_FIRST_SAMPLE_DELAY_MS);
+
+  for (uint8_t i = 0; i < DETECT_SAMPLE_COUNT; i++) {
+    String sign = "NO_SIGN";
+    uint8_t sampleConfidence = 0;
+    if (!captureAndUpdateSign(&sign)) {
+      noSignVotes++;
+    } else if (sign == "RED_SIGN") {
+      redVotes++;
+      sampleConfidence = lastConfidence;
+    } else if (sign == "GREEN_SIGN") {
+      greenVotes++;
+      sampleConfidence = lastConfidence;
+    } else if (sign == "BLACK_SIGN") {
+      blackVotes++;
+      sampleConfidence = lastConfidence;
+    } else {
+      noSignVotes++;
+    }
+
+    confidenceSum += sampleConfidence;
+
+    if (i + 1 < DETECT_SAMPLE_COUNT) {
+      delay(DETECT_SAMPLE_DELAY_MS);
+    }
+  }
+
+  lastSign = chooseSignFromVotes(redVotes, greenVotes, blackVotes, noSignVotes);
+  lastSampleCount = DETECT_SAMPLE_COUNT;
+  lastRedVotes = redVotes;
+  lastGreenVotes = greenVotes;
+  lastBlackVotes = blackVotes;
+  lastNoSignVotes = noSignVotes;
+  lastConfidence = DETECT_SAMPLE_COUNT == 0 ? 0 : confidenceSum / DETECT_SAMPLE_COUNT;
+  if (lastSign == "NO_SIGN") {
+    reason = "no_majority";
+    lastConfidence = 0;
+  }
+  lastReason = reason;
+  reportSign(true);
+  return lastSign;
+}
+
+void addDetectionFields(JsonDocument &doc) {
+  doc["sign"] = lastSign;
+  doc["confidence"] = lastConfidence;
+  doc["reason"] = lastReason;
+  doc["red_pixels"] = lastRedPixels;
+  doc["green_pixels"] = lastGreenPixels;
+  doc["black_pixels"] = lastBlackPixels;
+  doc["sampled_pixels"] = lastSampledPixels;
+  doc["sample_count"] = lastSampleCount;
+
+  JsonObject votes = doc["votes"].to<JsonObject>();
+  votes["red"] = lastRedVotes;
+  votes["green"] = lastGreenVotes;
+  votes["black"] = lastBlackVotes;
+  votes["none"] = lastNoSignVotes;
+
+  JsonObject roi = doc["roi"].to<JsonObject>();
+  roi["left_percent"] = ROI_LEFT_PERCENT;
+  roi["right_percent"] = ROI_RIGHT_PERCENT;
+  roi["top_percent"] = ROI_TOP_PERCENT;
+  roi["bottom_percent"] = ROI_BOTTOM_PERCENT;
+}
+
+void sendJsonResponse(const String &body) {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", body);
 }
 
 bool setupCamera() {
@@ -159,9 +438,7 @@ bool setupCamera() {
 
 void handleStatus() {
   JsonDocument doc;
-  doc["sign"] = lastSign;
-  doc["red_pixels"] = lastRedPixels;
-  doc["green_pixels"] = lastGreenPixels;
+  addDetectionFields(doc);
   doc["fps"] = fps;
   doc["wifi"] = WiFi.status() == WL_CONNECTED ? "connected" : "disconnected";
   doc["ip"] = WiFi.localIP().toString();
@@ -169,40 +446,60 @@ void handleStatus() {
   doc["hostname"] = "esp32cam.local";
   String body;
   serializeJson(doc, body);
-  server.send(200, "application/json", body);
+  sendJsonResponse(body);
 }
 
 void handleRoot() {
   server.send(
       200,
       "text/html",
-      "<html><body><h1>RoboBet ESP32-CAM</h1><p><a href='/stream'>stream</a></p><p><a href='/status'>status</a></p></body></html>");
+      "<html><body><h1>RoboBet ESP32-CAM</h1><p><a href='/stream'>stream</a></p><p><a href='/snapshot'>snapshot</a></p><p><a href='/status'>status</a></p><p><a href='/detect'>detect</a></p></body></html>");
+}
+
+void handleDetect() {
+  String sign = detectSignFromSamples();
+  (void)sign;
+
+  JsonDocument doc;
+  addDetectionFields(doc);
+  String body;
+  serializeJson(doc, body);
+  sendJsonResponse(body);
+}
+
+void handleSnapshot() {
+  WiFiClient client = server.client();
+  uint8_t *jpg = nullptr;
+  size_t jpgLen = 0;
+
+  if (!captureJpeg(&jpg, &jpgLen)) {
+    server.send(503, "text/plain", "camera capture failed");
+    return;
+  }
+
+  client.print("HTTP/1.1 200 OK\r\n");
+  client.print("Content-Type: image/jpeg\r\n");
+  client.printf("Content-Length: %u\r\n", static_cast<unsigned int>(jpgLen));
+  client.print("Cache-Control: no-store\r\n");
+  client.print("Access-Control-Allow-Origin: *\r\n");
+  client.print("Connection: close\r\n\r\n");
+  client.write(jpg, jpgLen);
+  free(jpg);
 }
 
 void handleStream() {
   WiFiClient client = server.client();
-  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.send(200, "multipart/x-mixed-replace; boundary=frame", "");
+  client.print("HTTP/1.1 200 OK\r\n");
+  client.print("Content-Type: multipart/x-mixed-replace; boundary=frame\r\n");
+  client.print("Cache-Control: no-cache\r\n");
+  client.print("Pragma: no-cache\r\n");
+  client.print("Access-Control-Allow-Origin: *\r\n");
+  client.print("Connection: close\r\n\r\n");
 
   while (client.connected()) {
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-      delay(20);
-      continue;
-    }
-
-    updateSign(fb);
-    updateFps();
-
     uint8_t *jpg = nullptr;
     size_t jpgLen = 0;
-    bool ok = frame2jpg(fb, 78, &jpg, &jpgLen);
-    esp_camera_fb_return(fb);
-
-    if (!ok || jpg == nullptr) {
-      if (jpg) {
-        free(jpg);
-      }
+    if (!captureJpeg(&jpg, &jpgLen)) {
       delay(20);
       continue;
     }
@@ -219,8 +516,27 @@ void handleStream() {
   }
 }
 
+bool applyStaticIpConfig() {
+#if CAMERA_USE_STATIC_IP
+  IPAddress localIp;
+  IPAddress gateway;
+  IPAddress subnet;
+  if (!localIp.fromString(CAMERA_STATIC_IP) ||
+      !gateway.fromString(CAMERA_GATEWAY_IP) ||
+      !subnet.fromString(CAMERA_SUBNET_MASK)) {
+    return false;
+  }
+  return WiFi.config(localIp, gateway, subnet);
+#else
+  return true;
+#endif
+}
+
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  if (!applyStaticIpConfig()) {
+    Serial.println("Static IP configuration failed; using DHCP.");
+  }
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t start = millis();
   Serial.println();
@@ -252,16 +568,57 @@ void connectWiFi() {
   Serial.println(WiFi.softAPIP());
 }
 
+void handleSerialCommand(const String &rawCommand) {
+  String command = rawCommand;
+  command.trim();
+  command.toUpperCase();
+
+  if (command == "DETECT") {
+    Serial.println(detectSignFromSamples());
+  }
+}
+
+void handleSerialCommands() {
+  static String command;
+
+  while (Serial.available()) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\n' || c == '\r') {
+      if (command.length() > 0) {
+        handleSerialCommand(command);
+        command = "";
+      }
+      continue;
+    }
+
+    command += c;
+    if (command.length() > 48) {
+      command = "";
+    }
+  }
+}
+
+void updateBackgroundDetection() {
+  if (millis() - lastBackgroundDetectMs < BACKGROUND_DETECT_INTERVAL_MS) {
+    return;
+  }
+
+  lastBackgroundDetectMs = millis();
+  captureAndUpdateSign();
+}
+
 void setupServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleStatus);
+  server.on("/detect", HTTP_GET, handleDetect);
+  server.on("/snapshot", HTTP_GET, handleSnapshot);
   server.on("/stream", HTTP_GET, handleStream);
   server.begin();
 }
 
 void setup() {
   // During standalone camera tests, Serial shows the IP. When wired to the robot,
-  // ignore these boot messages and use only GREEN_SIGN/RED_SIGN/NO_SIGN after startup.
+  // ignore boot messages and use only DETECT responses after startup.
   Serial.begin(115200);
   connectWiFi();
   setupCamera();
@@ -272,6 +629,8 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  handleSerialCommands();
+  updateBackgroundDetection();
   reportSign(false);
   delay(5);
 }

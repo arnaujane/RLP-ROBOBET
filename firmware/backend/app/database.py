@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterable
@@ -31,6 +33,15 @@ def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, name: str, definition: str) -> None:
+    if name not in _table_columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
@@ -51,6 +62,9 @@ def init_db() -> None:
                 finished_at TEXT,
                 elapsed_ms INTEGER,
                 obstacle_count INTEGER NOT NULL DEFAULT 0,
+                crossing_count INTEGER NOT NULL DEFAULT 0,
+                restrictions TEXT,
+                telemetry_summary TEXT,
                 result TEXT
             );
 
@@ -99,4 +113,7 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_column(conn, "runs", "crossing_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "runs", "restrictions", "TEXT")
+        _ensure_column(conn, "runs", "telemetry_summary", "TEXT")
 

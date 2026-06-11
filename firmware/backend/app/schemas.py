@@ -37,4 +37,5 @@ class RunFinish(BaseModel):
     reached_finish: bool = True
     elapsed_ms: int = Field(default=0, ge=0)
     obstacle_count: int = Field(default=0, ge=0)
+    crossing_count: int = Field(default=0, ge=0)
 

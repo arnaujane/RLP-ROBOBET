@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 
 from ..database import db, row_to_dict, rows_to_dicts
@@ -8,7 +12,7 @@ router = APIRouter(prefix="/api/bets", tags=["bets"])
 
 
 @router.get("")
-def list_bets(user_id: int | None = None) -> list[dict]:
+def list_bets(user_id: Optional[int] = None) -> list[dict]:
     with db() as conn:
         if user_id is None:
             rows = conn.execute("SELECT * FROM bets ORDER BY created_at DESC").fetchall()

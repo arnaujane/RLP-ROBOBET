@@ -1,14 +1,17 @@
 # RoboBet
 
-RoboBet es una demo local de robotica interactiva: un robot sigue un laberinto de lineas negras, resuelve cruces como grafo con DFS/BFS, detecta obstaculos con cinta blanca y señales de color, y una web permite apostar puntos ficticios y votar restricciones.
+RoboBet es una demo local de robotica interactiva: un robot sigue un laberinto de lineas negras, resuelve cruces con DFS/BFS practico, detecta obstaculos con manchas negras y senales de color, y una web permite apostar puntos ficticios y votar restricciones.
 
 ## Estructura
 
 - `backend/`: API FastAPI, SQLite, WebSockets y logica de apuestas/votaciones.
 - `frontend/`: interfaz web servida por el backend.
-- `firmware/robot/`: firmware PlatformIO para ESP32-WROOM.
-- `firmware/esp32_cam/`: firmware PlatformIO para ESP32-CAM.
+- `robot/`: firmware PlatformIO para ESP32-WROOM.
+- `esp32_cam/`: firmware PlatformIO para ESP32-CAM.
+- `data/robobet.sqlite3`: base de datos local SQLite con usuarios, apuestas, votaciones, votos, eventos y tiempos de carrera.
 - `docs/`: conexionado, calibracion y protocolo.
+- `docs/seguimiento_pruebas.md`: incidencias reales, diagnosticos e implementaciones aplicadas.
+- `docs/frontend_integracion.md`: como conectar el dashboard con sensores, motores, camaras, Twitch e historial real.
 - `scripts/run_backend.ps1`: arranque del servidor local.
 
 ## Arranque Rapido
@@ -45,17 +48,27 @@ docs/resumen_implementacion.md
    http://localhost:8000
    ```
 
-4. En `firmware/robot/platformio.ini` y `firmware/esp32_cam/platformio.ini`, cambia:
+4. Para probar la web sin robot fisico, abre otra terminal y ejecuta:
+
+   ```powershell
+   .\scripts\simulate_robot.ps1
+   ```
+
+   Luego pulsa `Iniciar` desde la web. El simulador se conecta a `/ws/robot`, emite cruces, obstaculos y final de carrera.
+
+5. En `robot/platformio.ini` y `esp32_cam/platformio.ini`, cambia:
 
    - `WIFI_SSID`
    - `WIFI_PASSWORD`
    - `ROBOBET_SERVER_HOST` en el robot, usando la IP del portatil.
 
-5. Flashea:
+   El robot usa `AP+STA`: mantiene el AP `RLP-ROBOBET` para la ESP32-CAM y tambien se conecta al WiFi configurado para hablar con el backend.
+
+6. Flashea:
 
    ```powershell
-   pio run -d firmware/robot -t upload
-   pio run -d firmware/esp32_cam -t upload
+   pio run -d robot -t upload
+   pio run -d esp32_cam -t upload
    ```
 
 ## Flujo De Demo
@@ -69,9 +82,9 @@ docs/resumen_implementacion.md
 7. Crear votaciones de algoritmo, velocidad y obstaculo.
 8. Crear apuestas.
 9. Cerrar votaciones.
-10. Colocar cinta blanca manualmente si gana una votacion de obstaculo.
+10. Preparar manchas negras de obstaculo/final y senales de camara verde, roja o negra.
 11. Iniciar carrera.
-12. Al detectar rojo, el robot envia `FINISH_DETECTED` y el backend liquida apuestas.
+12. Si la camara detecta verde, el robot cruza la mancha; si detecta rojo o no esta segura, hace media vuelta; si detecta negro, envia `FINISH_DETECTED` y el backend liquida apuestas.
 
 ## Notas Criticas
 

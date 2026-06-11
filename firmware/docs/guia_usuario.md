@@ -2,7 +2,7 @@
 
 ## 1. Que Es El Proyecto
 
-RoboBet es una demo de robotica interactiva. Un robot sigue un laberinto fisico hecho con lineas negras sobre fondo blanco, decide el recorrido usando DFS o BFS, detecta obstaculos colocados con cinta blanca y reconoce senales de color con una ESP32-CAM.
+RoboBet es una demo de robotica interactiva. Un robot sigue un laberinto fisico hecho con lineas negras sobre fondo blanco, decide el recorrido usando DFS o BFS, detecta marcas negras de obstaculo/final y reconoce senales de color con una ESP32-CAM.
 
 La parte web permite que los usuarios:
 
@@ -53,7 +53,7 @@ Por que esta separado asi:
 - El backend gestiona usuarios, apuestas, votaciones y comunicacion.
 - El frontend solo muestra la interfaz y llama a la API.
 - El firmware del robot controla sensores, motores y navegacion.
-- El firmware de la camara gestiona streaming y deteccion rojo/verde.
+- El firmware de la camara gestiona streaming y deteccion rojo/verde/negro.
 - La documentacion queda separada para que el montaje y la demo sean repetibles.
 
 ## 4. Ejecutar La Web Local
@@ -89,7 +89,25 @@ Si el servidor ya esta arrancado, no hace falta repetirlo. En la ejecucion anter
 http://127.0.0.1:8000
 ```
 
-## 5. Configurar WiFi Antes De Flashear
+## 5. Probar Sin Robot Fisico
+
+Con el backend arrancado, abre otra terminal en la carpeta del proyecto y ejecuta:
+
+```powershell
+.\scripts\simulate_robot.ps1
+```
+
+Luego abre la web y pulsa `Iniciar`. El simulador se conectara a `/ws/robot`, recibira los comandos del backend y emitira una secuencia con cruces, marca negra verde y final negro.
+
+Para probar una media vuelta por senal roja:
+
+```powershell
+.\scripts\simulate_robot.ps1 --scenario red-backtrack
+```
+
+Esta prueba valida frontend, backend, WebSockets, eventos y liquidacion de apuestas sin depender del hardware.
+
+## 6. Configurar WiFi Antes De Flashear
 
 Edita estos archivos:
 
@@ -124,10 +142,10 @@ Busca la direccion IPv4 de la WiFi.
 Por que es necesario:
 
 - El robot necesita saber a que servidor conectarse.
-- La ESP32-CAM necesita estar en la misma red para que la web pueda ver su stream.
+- El robot usa `AP+STA`: crea el AP `RLP-ROBOBET` para la ESP32-CAM y ademas se conecta al WiFi configurado para hablar con el backend.
 - `127.0.0.1` no sirve para el robot, porque en el robot significaria "yo mismo", no el portatil.
 
-## 6. Compilar Firmware
+## 7. Compilar Firmware
 
 Robot ESP32-WROOM:
 
@@ -147,7 +165,7 @@ Por que se compila antes:
 - Descarga librerias necesarias.
 - Genera el `.bin` que se subira a cada placa.
 
-## 7. Flashear El Robot
+## 8. Flashear El Robot
 
 Conecta la ESP32-WROOM por USB y ejecuta:
 
@@ -167,11 +185,11 @@ Por que se hace:
 
 Importante:
 
-- La UART0 del robot esta conectada a la ESP32-CAM en el esquema.
-- Durante flasheo puede ser necesario desconectar temporalmente la UART entre robot y camara si interfiere.
-- Despues de flashear, evita usar logs por Serial porque ese canal se usa para comunicacion con la camara.
+- La comunicacion robot-camara puede probarse por HTTP antes de soldar UART.
+- Cuando se use UART, puede ser necesario desconectar temporalmente la UART entre robot y camara durante flasheo si interfiere.
+- Despues de flashear con UART activo, evita usar logs por Serial en ese canal porque se usa para comunicacion con la camara.
 
-## 8. Flashear La ESP32-CAM
+## 9. Flashear La ESP32-CAM
 
 Conecta la ESP32-CAM con adaptador USB-serie.
 
@@ -198,10 +216,10 @@ python -m platformio run -d firmware/esp32_cam -t upload --upload-port COM6
 Por que se hace:
 
 - La ESP32-CAM servira el video frontal en `/stream`.
-- Detectara senales verde/roja.
-- Enviara al robot `GREEN_SIGN`, `RED_SIGN` o `NO_SIGN` por UART.
+- Detectara senales verde/roja/negra.
+- Respondera al robot `GREEN_SIGN`, `RED_SIGN`, `BLACK_SIGN` o `NO_SIGN` por HTTP o UART.
 
-## 9. Conexiones Hardware Obligatorias
+## 10. Conexiones Hardware Obligatorias
 
 Resumen de alimentacion:
 
@@ -236,7 +254,7 @@ Por que:
 - La electronica necesita 5 V estable desde la powerbank.
 - Las senales solo funcionan bien si todos comparten referencia GND.
 
-## 10. Uso De La Web
+## 11. Uso De La Web
 
 Abre:
 
@@ -315,7 +333,7 @@ Por que:
 - El operador mantiene control de seguridad.
 - La calibracion QTR es necesaria porque la luz ambiente y el suelo cambian las lecturas.
 
-## 11. Orden Recomendado Para Una Demo
+## 12. Orden Recomendado Para Una Demo
 
 1. Montar circuito y comprobar GND comun.
 2. Encender powerbank de 5 V.
@@ -347,12 +365,12 @@ Por que:
 13. Crear votacion de obstaculo.
 14. Crear apuestas.
 15. Cerrar votaciones.
-16. Colocar cinta blanca en el segmento ganador si aplica.
+16. Colocar marca negra de obstaculo/final y la senal de camara correspondiente si aplica.
 17. Pulsar `Iniciar`.
 18. Supervisar telemetria y video.
-19. Al detectar rojo, se finaliza la carrera y se liquidan puntos.
+19. Al detectar `BLACK_SIGN`, se finaliza la carrera y se liquidan puntos.
 
-## 12. Como Funciona El Robot
+## 13. Como Funciona El Robot
 
 El robot hace tres cosas principales:
 
@@ -360,19 +378,20 @@ El robot hace tres cosas principales:
 2. Detecta cruces y los convierte en nodos del grafo.
 3. Decide el siguiente tramo usando DFS o BFS.
 
-Cuando encuentra una zona blanca:
+Cuando encuentra una marca negra completa con los QTR:
 
-- Si la camara ve rojo, es final.
-- Si la camara ve verde, intenta avanzar unos centimetros para recuperar la linea.
-- Si no recupera la linea, marca la arista como bloqueada y vuelve al ultimo cruce.
+- Si la camara ve verde, atraviesa la marca y continua.
+- Si la camara ve rojo, marca el camino como bloqueado y hace media vuelta.
+- Si la camara ve negro, considera que ha llegado al final.
+- Si no hay senal o hay timeout, actua como rojo por seguridad.
 
 Por que:
 
-- La cinta blanca simula un obstaculo virtual/fisico.
+- La marca negra actua como punto de decision donde el robot consulta la camara.
 - El robot no debe quedarse parado; debe replanificar.
 - El grafo permite recordar tramos bloqueados y explorados.
 
-## 13. Ajustes Si Algo No Va Bien
+## 14. Ajustes Si Algo No Va Bien
 
 ### El robot no conecta
 
@@ -381,7 +400,8 @@ Revisar:
 - `WIFI_SSID`
 - `WIFI_PASSWORD`
 - `ROBOBET_SERVER_HOST`
-- Que portatil, robot y ESP32-CAM esten en la misma WiFi.
+- Que el robot este conectado al WiFi del backend.
+- Que la ESP32-CAM este conectada al AP `RLP-ROBOBET` del robot si se prueba por HTTP.
 - Que el backend este arrancado.
 
 ### La linea se detecta mal
@@ -416,7 +436,7 @@ TURN_MIN_MS
 TURN_TIMEOUT_MS
 ```
 
-### Camara detecta mal rojo/verde
+### Camara detecta mal rojo/verde/negro
 
 Ajustar en `firmware/esp32_cam/src/main.cpp`:
 
@@ -430,7 +450,7 @@ y los umbrales RGB dentro de:
 analyzeFrame()
 ```
 
-## 14. Comandos Utiles
+## 15. Comandos Utiles
 
 Arrancar backend:
 
@@ -442,6 +462,12 @@ Comprobar backend:
 
 ```powershell
 .\scripts\check_backend.ps1
+```
+
+Simular robot:
+
+```powershell
+.\scripts\simulate_robot.ps1
 ```
 
 Compilar robot:
@@ -480,7 +506,7 @@ Parar servidor si conoces el PID:
 Stop-Process -Id PID
 ```
 
-## 15. Por Que Esta Arquitectura Es Adecuada
+## 16. Por Que Esta Arquitectura Es Adecuada
 
 - **Web propia**: da control total sobre apuestas, votaciones, telemetria y streams.
 - **Puntos ficticios**: evita problemas legales y permite demo academica segura.

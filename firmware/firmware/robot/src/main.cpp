@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <WebSocketsClient.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -18,6 +19,46 @@
 
 #ifndef ROBOBET_SERVER_PORT
 #define ROBOBET_SERVER_PORT 8000
+#endif
+
+#ifndef WIFI_CONNECT_TIMEOUT_MS
+#define WIFI_CONNECT_TIMEOUT_MS 12000
+#endif
+
+#ifndef CAMERA_TRANSPORT_HTTP
+#define CAMERA_TRANSPORT_HTTP 1
+#endif
+
+#ifndef CAMERA_TRANSPORT_UART
+#define CAMERA_TRANSPORT_UART 0
+#endif
+
+#ifndef CAMERA_HTTP_HOST
+#define CAMERA_HTTP_HOST "192.168.4.2"
+#endif
+
+#ifndef CAMERA_HTTP_PORT
+#define CAMERA_HTTP_PORT 80
+#endif
+
+#ifndef CAMERA_HTTP_TIMEOUT_MS
+#define CAMERA_HTTP_TIMEOUT_MS 2800
+#endif
+
+#ifndef CAMERA_UART_BAUD
+#define CAMERA_UART_BAUD 115200
+#endif
+
+#ifndef CAMERA_UART_RX
+#define CAMERA_UART_RX 16
+#endif
+
+#ifndef CAMERA_UART_TX
+#define CAMERA_UART_TX 4
+#endif
+
+#ifndef CAMERA_UART_TIMEOUT_MS
+#define CAMERA_UART_TIMEOUT_MS 1800
 #endif
 
 static constexpr char AP_SSID[] = "RLP-ROBOBET";
@@ -40,8 +81,13 @@ static constexpr uint8_t PWM_BITS = 8;
 static constexpr int PWM_MAX = 255;
 static constexpr uint16_t QTR_TIMEOUT_US = 3000;
 static constexpr uint16_t INTERSECTION_ACTIVE_COUNT = 5;
+static constexpr uint8_t BLACK_PATCH_MIN_ACTIVE_SENSORS = 7;
+static constexpr uint8_t SIDE_PATH_MIN_ACTIVE_SENSORS = 2;
+static constexpr uint8_t STRAIGHT_PATH_MIN_ACTIVE_SENSORS = 1;
 static constexpr uint32_t TELEMETRY_INTERVAL_MS = 500;
 static constexpr uint32_t NODE_DEBOUNCE_MS = 700;
+static constexpr uint32_t BLACK_PATCH_CONFIRM_MS = 120;
+static constexpr uint32_t BLACK_PATCH_CLEAR_TIMEOUT_MS = 900;
 static constexpr uint32_t GAP_BRIDGE_MS = 420;
 static constexpr uint32_t TURN_MIN_MS = 240;
 static constexpr uint32_t TURN_TIMEOUT_MS = 1500;
@@ -88,6 +134,14 @@ enum class Turn : int8_t {
   BACK = 2
 };
 
+enum class CameraSign {
+  NO_SIGN,
+  GREEN_SIGN,
+  RED_SIGN,
+  BLACK_SIGN,
+  TIMEOUT
+};
+
 enum DirectionBit : uint8_t {
   DIR_LEFT = 0b001,
   DIR_STRAIGHT = 0b010,
@@ -98,11 +152,15 @@ struct SensorFrame {
   uint16_t raw[QTR_COUNT]{};
   uint16_t normalized[QTR_COUNT]{};
   uint8_t activeCount = 0;
+  uint8_t leftActiveCount = 0;
+  uint8_t centerActiveCount = 0;
+  uint8_t rightActiveCount = 0;
   bool left = false;
   bool center = false;
   bool right = false;
   bool lineSeen = false;
   bool intersection = false;
+  bool blackPatch = false;
   int position = 3500;
 };
 
@@ -122,6 +180,7 @@ RobotState robotState = RobotState::WAITING_START;
 Algorithm algorithm = Algorithm::DFS;
 WebSocketsClient webSocket;
 WebServer localServer(80);
+HardwareSerial CameraSerial(2);
 
 uint16_t qtrMin[QTR_COUNT];
 uint16_t qtrMax[QTR_COUNT];
@@ -137,12 +196,19 @@ uint32_t lastTelemetryMs = 0;
 uint32_t lastNodeMs = 0;
 uint32_t lastLoopMs = 0;
 uint32_t searchStartMs = 0;
+uint32_t blackPatchFirstSeenMs = 0;
 int obstacleCount = 0;
+uint16_t crossingCount = 0;
 int lastLinePosition = 3500;
 int lastKnownDirection = 0;
 float lastKnownPosition = 3.5f;
 uint16_t lastSensorValues[QTR_COUNT] = {0};
 bool lastLineDetected[QTR_COUNT] = {false};
+int lastLeftMotorPwm = 0;
+int lastRightMotorPwm = 0;
+CameraSign lastCameraSign = CameraSign::NO_SIGN;
+uint8_t lastCameraConfidence = 0;
+String lastCameraReason = "not_checked";
 
 int basePwm = DEFAULT_BASE_PWM;
 int turnPwm = DEFAULT_TURN_PWM;
@@ -197,6 +263,29 @@ const char *turnName(Turn turn) {
   return "UNKNOWN";
 }
 
+const char *cameraSignName(CameraSign sign) {
+  switch (sign) {
+    case CameraSign::NO_SIGN: return "NO_SIGN";
+    case CameraSign::GREEN_SIGN: return "GREEN_SIGN";
+    case CameraSign::RED_SIGN: return "RED_SIGN";
+    case CameraSign::BLACK_SIGN: return "BLACK_SIGN";
+    case CameraSign::TIMEOUT: return "TIMEOUT";
+  }
+  return "UNKNOWN";
+}
+
+const char *cameraTransportName() {
+#if CAMERA_TRANSPORT_UART && CAMERA_TRANSPORT_HTTP
+  return "UART_HTTP";
+#elif CAMERA_TRANSPORT_UART
+  return "UART";
+#elif CAMERA_TRANSPORT_HTTP
+  return "HTTP";
+#else
+  return "NONE";
+#endif
+}
+
 uint8_t turnToBit(Turn turn) {
   switch (turn) {
     case Turn::LEFT: return DIR_LEFT;
@@ -213,6 +302,172 @@ bool motorsAllowed() {
 
 void serviceNetwork() {
   localServer.handleClient();
+  webSocket.loop();
+}
+
+bool parseCameraSign(const String &text, CameraSign &sign) {
+  String value = text;
+  value.trim();
+  value.toUpperCase();
+
+  if (value == "NO_SIGN") {
+    sign = CameraSign::NO_SIGN;
+    return true;
+  }
+  if (value == "GREEN_SIGN") {
+    sign = CameraSign::GREEN_SIGN;
+    return true;
+  }
+  if (value == "RED_SIGN") {
+    sign = CameraSign::RED_SIGN;
+    return true;
+  }
+  if (value == "BLACK_SIGN") {
+    sign = CameraSign::BLACK_SIGN;
+    return true;
+  }
+  if (value == "TIMEOUT") {
+    sign = CameraSign::TIMEOUT;
+    return true;
+  }
+
+  return false;
+}
+
+void setCameraDiagnostics(uint8_t confidence, const String &reason) {
+  lastCameraConfidence = constrain(confidence, 0, 100);
+  lastCameraReason = reason;
+}
+
+CameraSign requestCameraSignHttp() {
+#if CAMERA_TRANSPORT_HTTP
+  WiFiClient client;
+  HTTPClient http;
+  String url = "http://" + String(CAMERA_HTTP_HOST) + ":" + String(CAMERA_HTTP_PORT) + "/detect";
+
+  http.setTimeout(CAMERA_HTTP_TIMEOUT_MS);
+  if (!http.begin(client, url)) {
+    setCameraDiagnostics(0, "http_begin_failed");
+    return CameraSign::TIMEOUT;
+  }
+
+  int statusCode = http.GET();
+  if (statusCode != HTTP_CODE_OK) {
+    http.end();
+    setCameraDiagnostics(0, String("http_status_") + String(statusCode));
+    return CameraSign::TIMEOUT;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    setCameraDiagnostics(0, "json_error");
+    return CameraSign::TIMEOUT;
+  }
+
+  CameraSign sign = CameraSign::TIMEOUT;
+  const char *rawSign = doc["sign"] | "";
+  if (!parseCameraSign(rawSign, sign)) {
+    setCameraDiagnostics(0, "unknown_sign");
+    return CameraSign::TIMEOUT;
+  }
+  const char *reason = doc["reason"] | "http_detect";
+  uint8_t fallbackConfidence = sign == CameraSign::NO_SIGN ? 0 : 100;
+  setCameraDiagnostics(doc["confidence"] | fallbackConfidence, reason);
+  return sign;
+#else
+  setCameraDiagnostics(0, "http_disabled");
+  return CameraSign::TIMEOUT;
+#endif
+}
+
+CameraSign requestCameraSignUart() {
+#if CAMERA_TRANSPORT_UART
+  while (CameraSerial.available()) {
+    CameraSerial.read();
+  }
+
+  CameraSerial.println("DETECT");
+
+  String line;
+  uint32_t start = millis();
+  while (millis() - start < CAMERA_UART_TIMEOUT_MS) {
+    serviceNetwork();
+
+    while (CameraSerial.available()) {
+      char c = static_cast<char>(CameraSerial.read());
+      if (c == '\n' || c == '\r') {
+        CameraSign sign = CameraSign::TIMEOUT;
+        if (parseCameraSign(line, sign)) {
+          uint8_t confidence = sign == CameraSign::NO_SIGN ? 0 : 100;
+          setCameraDiagnostics(confidence, "uart_response");
+          return sign;
+        }
+        line = "";
+        continue;
+      }
+
+      line += c;
+      if (line.length() > 48) {
+        line = "";
+      }
+    }
+
+    delay(5);
+  }
+
+  setCameraDiagnostics(0, "uart_timeout");
+  return CameraSign::TIMEOUT;
+#else
+  setCameraDiagnostics(0, "uart_disabled");
+  return CameraSign::TIMEOUT;
+#endif
+}
+
+CameraSign requestCameraSign() {
+#if CAMERA_TRANSPORT_UART
+  CameraSign uartSign = requestCameraSignUart();
+  if (uartSign != CameraSign::TIMEOUT) {
+    return uartSign;
+  }
+#endif
+
+#if CAMERA_TRANSPORT_HTTP
+  return requestCameraSignHttp();
+#else
+  return CameraSign::TIMEOUT;
+#endif
+}
+
+uint8_t pwmPercent(int pwm) {
+  return static_cast<uint8_t>((abs(constrain(pwm, -PWM_MAX, PWM_MAX)) * 100) / PWM_MAX);
+}
+
+void addLiveDiagnostics(JsonDocument &doc) {
+  JsonArray sensorValues = doc["sensor_values"].to<JsonArray>();
+  JsonArray sensorActive = doc["sensor_active"].to<JsonArray>();
+  uint8_t activeCount = 0;
+
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    sensorValues.add(lastSensorValues[i]);
+    sensorActive.add(lastLineDetected[i]);
+    if (lastLineDetected[i]) {
+      activeCount++;
+    }
+  }
+
+  doc["sensor_active_count"] = activeCount;
+  doc["node_count"] = nodeCount;
+  doc["crossing_count"] = crossingCount;
+  doc["qtr_threshold"] = currentLineThresholdRaw;
+  doc["qtr_calibrated"] = qtrCalibrated;
+  doc["motor_left_pwm"] = lastLeftMotorPwm;
+  doc["motor_right_pwm"] = lastRightMotorPwm;
+  doc["motor_left_percent"] = pwmPercent(lastLeftMotorPwm);
+  doc["motor_right_percent"] = pwmPercent(lastRightMotorPwm);
 }
 
 void sendEvent(const char *event, JsonDocument *extra = nullptr) {
@@ -224,8 +479,12 @@ void sendEvent(const char *event, JsonDocument *extra = nullptr) {
   doc["current_node"] = currentNode;
   doc["obstacle_count"] = obstacleCount;
   doc["line_position"] = lastLinePosition;
+  doc["camera_sign"] = cameraSignName(lastCameraSign);
+  doc["camera_confidence"] = lastCameraConfidence;
+  doc["camera_reason"] = lastCameraReason;
   doc["threshold"] = currentLineThresholdRaw;
   doc["elapsed_ms"] = motorsAllowed() ? millis() - runStartMs : 0;
+  addLiveDiagnostics(doc);
   if (extra != nullptr) {
     for (JsonPair pair : extra->as<JsonObject>()) {
       doc[pair.key()] = pair.value();
@@ -263,8 +522,10 @@ int applySpeedLimit(int pwm) {
 }
 
 void setMotors(int left, int right) {
-  setMotorRaw(PWM_LEFT_CHANNEL, MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, applySpeedLimit(left), INVERT_LEFT_MOTOR);
-  setMotorRaw(PWM_RIGHT_CHANNEL, MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, applySpeedLimit(right), INVERT_RIGHT_MOTOR);
+  lastLeftMotorPwm = applySpeedLimit(left);
+  lastRightMotorPwm = applySpeedLimit(right);
+  setMotorRaw(PWM_LEFT_CHANNEL, MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, lastLeftMotorPwm, INVERT_LEFT_MOTOR);
+  setMotorRaw(PWM_RIGHT_CHANNEL, MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, lastRightMotorPwm, INVERT_RIGHT_MOTOR);
 }
 
 void stopMotors() {
@@ -352,14 +613,26 @@ SensorFrame readSensors() {
     frame.normalized[i] = normalized;
     if (value > currentLineThresholdRaw) {
       frame.activeCount++;
+      if (i <= 2) {
+        frame.leftActiveCount++;
+      } else if (i <= 4) {
+        frame.centerActiveCount++;
+      } else {
+        frame.rightActiveCount++;
+      }
     }
   }
 
-  frame.left = frame.raw[0] > currentLineThresholdRaw || frame.raw[1] > currentLineThresholdRaw || frame.raw[2] > currentLineThresholdRaw;
-  frame.center = frame.raw[3] > currentLineThresholdRaw || frame.raw[4] > currentLineThresholdRaw;
-  frame.right = frame.raw[5] > currentLineThresholdRaw || frame.raw[6] > currentLineThresholdRaw || frame.raw[7] > currentLineThresholdRaw;
+  frame.left = frame.leftActiveCount >= SIDE_PATH_MIN_ACTIVE_SENSORS;
+  frame.center = frame.centerActiveCount >= STRAIGHT_PATH_MIN_ACTIVE_SENSORS;
+  frame.right = frame.rightActiveCount >= SIDE_PATH_MIN_ACTIVE_SENSORS;
   frame.lineSeen = frame.activeCount > 0;
-  frame.intersection = frame.activeCount >= INTERSECTION_ACTIVE_COUNT || (frame.left && frame.center && frame.right);
+  frame.blackPatch = frame.activeCount >= BLACK_PATCH_MIN_ACTIVE_SENSORS;
+
+  // The maze only uses left+straight or right+straight decisions. A full black
+  // patch is handled before node logic so the camera is queried only there.
+  bool supportedBranch = (frame.left || frame.right) && !(frame.left && frame.right);
+  frame.intersection = !frame.blackPatch && supportedBranch && frame.activeCount >= INTERSECTION_ACTIVE_COUNT;
 
   if (!frame.lineSeen) {
     frame.position = lastLinePosition;
@@ -410,6 +683,13 @@ SensorFrame readSensors() {
   return frame;
 }
 
+void storeLastSensorFrame(const SensorFrame &frame) {
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    lastSensorValues[i] = frame.raw[i];
+    lastLineDetected[i] = frame.raw[i] > currentLineThresholdRaw;
+  }
+}
+
 void updateAdaptiveThreshold(const SensorFrame &frame) {
   if (frame.lineSeen) {
     if (currentLineThresholdRaw < targetLineThresholdRaw) {
@@ -424,7 +704,7 @@ void updateAdaptiveThreshold(const SensorFrame &frame) {
 }
 
 void updateLineMemory(const SensorFrame &frame) {
-  if (!frame.lineSeen) {
+  if (!frame.lineSeen || frame.blackPatch) {
     return;
   }
 
@@ -458,6 +738,14 @@ void calibrateQtr() {
 }
 
 uint8_t optionsFromFrame(const SensorFrame &frame) {
+  if (frame.blackPatch) {
+    return 0;
+  }
+
+  if (frame.left && frame.right) {
+    return frame.center ? DIR_STRAIGHT : 0;
+  }
+
   uint8_t options = 0;
   if (frame.left) {
     options |= DIR_LEFT;
@@ -502,12 +790,16 @@ void resetMaze() {
   nodeCount = 0;
   currentNode = -1;
   obstacleCount = 0;
+  crossingCount = 0;
   lastTurn = Turn::STRAIGHT;
   lastKnownDirection = 0;
   lastKnownPosition = 3.5f;
   lastLinePosition = 3500;
   currentLineThresholdRaw = targetLineThresholdRaw;
   isSearching = false;
+  blackPatchFirstSeenMs = 0;
+  lastCameraSign = CameraSign::NO_SIGN;
+  setCameraDiagnostics(0, "not_checked");
 }
 
 int createNode(uint8_t options) {
@@ -524,7 +816,7 @@ int createNode(uint8_t options) {
 
 bool lineCentered() {
   SensorFrame frame = readSensors();
-  return frame.center && frame.lineSeen && !frame.intersection;
+  return frame.center && frame.lineSeen && !frame.intersection && !frame.blackPatch;
 }
 
 void driveFor(int left, int right, uint32_t durationMs) {
@@ -574,6 +866,97 @@ void markLastTurnBlocked() {
   }
 }
 
+bool blackPatchConfirmed(const SensorFrame &frame) {
+  if (!frame.blackPatch) {
+    blackPatchFirstSeenMs = 0;
+    return false;
+  }
+
+  if (blackPatchFirstSeenMs == 0) {
+    blackPatchFirstSeenMs = millis();
+    return false;
+  }
+
+  return millis() - blackPatchFirstSeenMs >= BLACK_PATCH_CONFIRM_MS;
+}
+
+bool drivePastBlackPatch() {
+  uint32_t start = millis();
+  setMotors(basePwm, basePwm);
+
+  while (millis() - start < BLACK_PATCH_CLEAR_TIMEOUT_MS) {
+    serviceNetwork();
+
+    SensorFrame frame = readSensors();
+    storeLastSensorFrame(frame);
+    if (!frame.blackPatch && frame.lineSeen) {
+      stopMotors();
+      return true;
+    }
+
+    delay(10);
+  }
+
+  stopMotors();
+  return false;
+}
+
+void finishRunFromCameraSign() {
+  runActive = false;
+  localMotorsEnabled = false;
+  stopMotors();
+  robotState = RobotState::FINISHED;
+  sendEvent("FINISH_DETECTED");
+}
+
+void backtrackFromBlockedObstacle() {
+  markLastTurnBlocked();
+
+  JsonDocument extra;
+  extra["camera_sign"] = cameraSignName(lastCameraSign);
+  extra["blocked_turn"] = turnName(lastTurn);
+  sendEvent("OBSTACLE_BLOCKED", &extra);
+
+  robotState = RobotState::BACKTRACKING;
+  sendEvent("BACKTRACK_STARTED");
+  performTurn(Turn::BACK);
+  robotState = RobotState::FOLLOWING_LINE;
+  sendEvent("BACKTRACK_DONE");
+}
+
+void handleObstaclePatch() {
+  stopMotors();
+  robotState = RobotState::OBSTACLE_CHECK;
+
+  lastCameraSign = requestCameraSign();
+  blackPatchFirstSeenMs = 0;
+
+  JsonDocument extra;
+  extra["camera_sign"] = cameraSignName(lastCameraSign);
+  extra["transport"] = cameraTransportName();
+  sendEvent("OBSTACLE_PATCH_DETECTED", &extra);
+
+  if (lastCameraSign == CameraSign::BLACK_SIGN) {
+    finishRunFromCameraSign();
+    return;
+  }
+
+  obstacleCount++;
+
+  if (lastCameraSign == CameraSign::GREEN_SIGN) {
+    bool cleared = drivePastBlackPatch();
+    JsonDocument passExtra;
+    passExtra["camera_sign"] = cameraSignName(lastCameraSign);
+    passExtra["cleared"] = cleared;
+    sendEvent("OBSTACLE_ALLOWED", &passExtra);
+    robotState = RobotState::FOLLOWING_LINE;
+    return;
+  }
+
+  // If the camera is unsure, the safest decision is the same as a red sign.
+  backtrackFromBlockedObstacle();
+}
+
 void handleNode(const SensorFrame &frame) {
   if (!runActive) {
     return;
@@ -585,6 +968,7 @@ void handleNode(const SensorFrame &frame) {
   lastNodeMs = millis();
   stopMotors();
   robotState = RobotState::NODE_DETECTED;
+  crossingCount++;
 
   uint8_t options = optionsFromFrame(frame);
   if (options == 0) {
@@ -703,9 +1087,12 @@ void sendTelemetry() {
   doc["current_node"] = currentNode;
   doc["obstacle_count"] = obstacleCount;
   doc["line_position"] = lastLinePosition;
-  doc["camera_sign"] = "NO_SIGN";
+  doc["camera_sign"] = cameraSignName(lastCameraSign);
+  doc["camera_confidence"] = lastCameraConfidence;
+  doc["camera_reason"] = lastCameraReason;
   doc["threshold"] = currentLineThresholdRaw;
   doc["elapsed_ms"] = motorsAllowed() ? millis() - runStartMs : 0;
+  addLiveDiagnostics(doc);
   String payload;
   serializeJson(doc, payload);
   if (wsConnected) {
@@ -783,6 +1170,53 @@ String buildSensorValues() {
   return valuesText;
 }
 
+String buildQtrPinListJson() {
+  String json = "[";
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+    json += String(QTR_PINS[i]);
+  }
+  json += "]";
+  return json;
+}
+
+String buildQtrLevelListJson(const uint8_t levels[QTR_COUNT]) {
+  String json = "[";
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+    json += String(levels[i]);
+  }
+  json += "]";
+  return json;
+}
+
+String buildQtrRawListJson(const uint16_t values[QTR_COUNT]) {
+  String json = "[";
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+    json += String(values[i]);
+  }
+  json += "]";
+  return json;
+}
+
+void readQtrDigitalLevels(uint8_t levels[QTR_COUNT]) {
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    pinMode(QTR_PINS[i], INPUT);
+  }
+  delayMicroseconds(80);
+
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    levels[i] = digitalRead(QTR_PINS[i]);
+  }
+}
+
 void resetDefaults() {
   basePwm = DEFAULT_BASE_PWM;
   turnPwm = DEFAULT_TURN_PWM;
@@ -856,7 +1290,7 @@ String buildControlPage() {
   html += "async function refresh(){const r=await fetch('/status');const s=await r.json();window.localMotorsEnabled=!!s.localMotorsEnabled;";
   html += "ids.forEach(id=>document.getElementById(id).value=s[id]);";
   html += "document.getElementById('sensorValues').textContent=s.sensorValues;";
-  html += "document.getElementById('lineMap').textContent=s.lineMap + '\\nUmbral actual: ' + s.currentLineThresholdRaw + ' / objetivo: ' + s.targetLineThresholdRaw + '\\nMemoria direccion: ' + s.lastKnownDirection + '\\nPosicion: ' + s.lastKnownPosition + '\\nBuscando: ' + (s.isSearching ? 'SI' : 'NO') + '\\nRun activo: ' + (s.runActive ? 'SI' : 'NO');";
+  html += "document.getElementById('lineMap').textContent=s.lineMap + '\\nUmbral actual: ' + s.currentLineThresholdRaw + ' / objetivo: ' + s.targetLineThresholdRaw + '\\nCamara: ' + s.cameraSign + ' (' + s.cameraConfidence + '% ' + s.cameraReason + ')' + '\\nMemoria direccion: ' + s.lastKnownDirection + '\\nPosicion: ' + s.lastKnownPosition + '\\nBuscando: ' + (s.isSearching ? 'SI' : 'NO') + '\\nRun activo: ' + (s.runActive ? 'SI' : 'NO');";
   html += "document.getElementById('localMotorsEnabledValue').textContent=window.localMotorsEnabled?'ON':'OFF';";
   html += "document.getElementById('toggleMotors').textContent=window.localMotorsEnabled?'Desactivar motores':'Activar motores';syncLabels();}";
   html += "ids.forEach(id=>{const el=document.getElementById(id);el.addEventListener('change',push);el.addEventListener('blur',push);});";
@@ -947,6 +1381,9 @@ void handleStatus() {
   json += "\"lastKnownDirection\":" + String(lastKnownDirection) + ",";
   json += "\"lastKnownPosition\":" + String(lastKnownPosition, 2) + ",";
   json += "\"isSearching\":" + String(isSearching ? 1 : 0) + ",";
+  json += "\"cameraSign\":\"" + String(cameraSignName(lastCameraSign)) + "\",";
+  json += "\"cameraConfidence\":" + String(lastCameraConfidence) + ",";
+  json += "\"cameraReason\":\"" + lastCameraReason + "\",";
   json += "\"sensorValues\":\"" + buildSensorValues() + "\",";
   json += "\"lineMap\":\"" + buildLineMap() + "\"";
   json += "}";
@@ -954,14 +1391,80 @@ void handleStatus() {
   localServer.send(200, "application/json", json);
 }
 
+void handleQtrDebug() {
+  if (runActive) {
+    localServer.send(409, "application/json", "{\"error\":\"stop_robot_before_qtr_debug\"}");
+    return;
+  }
+
+  stopMotors();
+
+  uint8_t idleLevels[QTR_COUNT];
+  uint8_t chargedLevels[QTR_COUNT];
+  uint8_t releasedLevels[QTR_COUNT];
+  uint16_t rawValues[QTR_COUNT];
+
+  readQtrDigitalLevels(idleLevels);
+
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    pinMode(QTR_PINS[i], OUTPUT);
+    digitalWrite(QTR_PINS[i], HIGH);
+  }
+  delayMicroseconds(20);
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    chargedLevels[i] = digitalRead(QTR_PINS[i]);
+  }
+
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    pinMode(QTR_PINS[i], INPUT);
+  }
+  delayMicroseconds(50);
+  for (uint8_t i = 0; i < QTR_COUNT; i++) {
+    releasedLevels[i] = digitalRead(QTR_PINS[i]);
+  }
+
+  readQtrRaw(rawValues);
+
+  String json = "{";
+  json += "\"pins\":" + buildQtrPinListJson() + ",";
+  json += "\"idle_levels\":" + buildQtrLevelListJson(idleLevels) + ",";
+  json += "\"charged_high_levels\":" + buildQtrLevelListJson(chargedLevels) + ",";
+  json += "\"released_after_50us_levels\":" + buildQtrLevelListJson(releasedLevels) + ",";
+  json += "\"raw_us\":" + buildQtrRawListJson(rawValues) + ",";
+  json += "\"timeout_us\":" + String(QTR_TIMEOUT_US) + ",";
+  json += "\"note\":\"idle should change with wiring, charged should be all 1, raw below timeout on reflective white\"";
+  json += "}";
+
+  localServer.send(200, "application/json", json);
+}
+
 void connectWiFi() {
-  Serial.println("[BOOT] Configurando modo AP");
-  WiFi.mode(WIFI_AP);
+  Serial.println("[BOOT] Configurando modo AP+STA");
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   Serial.print("[BOOT] SSID AP: ");
   Serial.println(AP_SSID);
   Serial.print("[BOOT] IP AP: ");
   Serial.println(WiFi.softAPIP());
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("[BOOT] Conectando STA a ");
+  Serial.println(WIFI_SSID);
+
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    localServer.handleClient();
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("[BOOT] IP STA: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("[BOOT] STA sin conexion; el AP local sigue activo");
+  }
 }
 
 void setupWebSocket() {
@@ -975,7 +1478,26 @@ void setupLocalUi() {
   localServer.on("/set", handleSet);
   localServer.on("/reset", handleReset);
   localServer.on("/status", handleStatus);
+  localServer.on("/qtr-debug", handleQtrDebug);
   localServer.begin();
+}
+
+void setupCameraTransport() {
+#if CAMERA_TRANSPORT_UART
+  CameraSerial.begin(CAMERA_UART_BAUD, SERIAL_8N1, CAMERA_UART_RX, CAMERA_UART_TX);
+  Serial.print("[BOOT] Camara UART activa RX=");
+  Serial.print(CAMERA_UART_RX);
+  Serial.print(" TX=");
+  Serial.println(CAMERA_UART_TX);
+#endif
+
+#if CAMERA_TRANSPORT_HTTP
+  Serial.print("[BOOT] Camara HTTP configurada en http://");
+  Serial.print(CAMERA_HTTP_HOST);
+  Serial.print(":");
+  Serial.print(CAMERA_HTTP_PORT);
+  Serial.println("/detect");
+#endif
 }
 
 void setup() {
@@ -990,8 +1512,15 @@ void setup() {
   resetMaze();
   Serial.println("[BOOT] Estado del laberinto reiniciado");
   connectWiFi();
+  setupCameraTransport();
   setupLocalUi();
+  setupWebSocket();
   Serial.println("[BOOT] WebUI local activa en http://192.168.4.1");
+  Serial.print("[BOOT] WebSocket backend ws://");
+  Serial.print(ROBOBET_SERVER_HOST);
+  Serial.print(":");
+  Serial.print(ROBOBET_SERVER_PORT);
+  Serial.println("/ws/robot");
   robotState = RobotState::WAITING_START;
   Serial.println("[BOOT] Robot en WAITING_START");
 }
@@ -1005,6 +1534,9 @@ void loop() {
   }
   lastLoopMs = millis();
 
+  SensorFrame frame = readSensors();
+  storeLastSensorFrame(frame);
+
   if (!motorsAllowed()) {
     stopMotors();
     debugLog("[STATE] Motores desactivados, esperando activacion local");
@@ -1016,14 +1548,21 @@ void loop() {
     robotState = RobotState::FOLLOWING_LINE;
   }
 
-  SensorFrame frame = readSensors();
-  for (uint8_t i = 0; i < QTR_COUNT; i++) {
-    lastSensorValues[i] = frame.raw[i];
-    lastLineDetected[i] = frame.raw[i] > currentLineThresholdRaw;
-  }
-
   updateAdaptiveThreshold(frame);
   updateLineMemory(frame);
+
+  if (frame.blackPatch) {
+    stopMotors();
+    if (!blackPatchConfirmed(frame)) {
+      debugLog("[STATE] Marca negra detectada, confirmando");
+      return;
+    }
+
+    debugLog("[STATE] Marca negra confirmada");
+    handleObstaclePatch();
+    return;
+  }
+  blackPatchFirstSeenMs = 0;
 
   if (!frame.lineSeen) {
     debugLog("[STATE] Linea perdida");

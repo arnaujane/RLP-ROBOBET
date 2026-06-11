@@ -27,6 +27,7 @@ El robot envia telemetria y eventos por WebSocket:
   "current_node": 3,
   "obstacle_count": 1,
   "line_position": 3520,
+  "camera_sign": "GREEN_SIGN",
   "elapsed_ms": 42130,
   "turn": "LEFT"
 }
@@ -40,8 +41,9 @@ Eventos principales:
 - `RUN_STARTED`
 - `EDGE_SELECTED`
 - `LINE_LOST`
-- `USER_OBSTACLE_BRIDGED`
-- `OBSTACLE_DETECTED`
+- `OBSTACLE_PATCH_DETECTED`
+- `OBSTACLE_ALLOWED`
+- `OBSTACLE_BLOCKED`
 - `BACKTRACK_STARTED`
 - `BACKTRACK_DONE`
 - `FINISH_DETECTED`
@@ -49,15 +51,43 @@ Eventos principales:
 - `RUN_RESET`
 - `GRAPH_FULL`
 
-## ESP32-CAM A Robot
+## Robot A ESP32-CAM
 
-UART texto, una linea por evento:
+El robot solo consulta la camara cuando detecta una marca negra completa con los QTR. Hay dos transportes disponibles:
+
+- HTTP/IP para pruebas sin soldar UART.
+- UART para la version final cableada.
+
+### HTTP
+
+El robot llama:
+
+```text
+GET http://192.168.4.2/detect
+```
+
+La camara responde:
+
+```json
+{ "sign": "GREEN_SIGN", "red_pixels": 0, "green_pixels": 120, "black_pixels": 0 }
+```
+
+### UART
+
+El robot envia:
+
+```text
+DETECT
+```
+
+La camara responde una linea:
 
 ```text
 GREEN_SIGN
 RED_SIGN
+BLACK_SIGN
 NO_SIGN
 ```
 
-La ESP32-CAM usa UART0 segun el esquema. No mezclar este canal con logs de depuracion durante la demo.
+El robot interpreta `NO_SIGN` o timeout igual que `RED_SIGN`: media vuelta. `BLACK_SIGN` significa final de recorrido.
 

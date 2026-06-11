@@ -38,5 +38,25 @@ def get_user(user_id: int) -> dict:
         user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not user:
             raise HTTPException(404, "User not found")
-        return row_to_dict(user)
+        payload = row_to_dict(user)
+        payload["votes"] = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT votes.id, votes.poll_id, votes.choice, votes.created_at,
+                       polls.kind, polls.title, polls.status, polls.winner
+                FROM votes
+                JOIN polls ON polls.id = votes.poll_id
+                WHERE votes.user_id = ?
+                ORDER BY votes.created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        )
+        payload["bets"] = rows_to_dicts(
+            conn.execute(
+                "SELECT * FROM bets WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        )
+        return payload
 

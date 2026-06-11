@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -10,8 +13,26 @@ from ..services.polls import close_poll
 router = APIRouter(prefix="/api/polls", tags=["polls"])
 
 
+def poll_results(conn, poll_id: int, options: list[str]) -> list[dict]:
+    rows = conn.execute(
+        "SELECT choice, COUNT(*) AS votes FROM votes WHERE poll_id = ? GROUP BY choice",
+        (poll_id,),
+    ).fetchall()
+    counts = {row["choice"]: row["votes"] for row in rows}
+    return [{"choice": option, "votes": int(counts.get(option, 0))} for option in options]
+
+
+def enrich_poll(conn, poll: dict) -> dict:
+    options = json.loads(poll["options"])
+    results = poll_results(conn, poll["id"], options)
+    poll["options"] = options
+    poll["results"] = results
+    poll["total_votes"] = sum(item["votes"] for item in results)
+    return poll
+
+
 @router.get("")
-def list_polls(status: str | None = None) -> list[dict]:
+def list_polls(status: Optional[str] = None) -> list[dict]:
     with db() as conn:
         if status:
             rows = conn.execute("SELECT * FROM polls WHERE status = ? ORDER BY created_at DESC", (status,)).fetchall()
@@ -19,7 +40,7 @@ def list_polls(status: str | None = None) -> list[dict]:
             rows = conn.execute("SELECT * FROM polls ORDER BY created_at DESC").fetchall()
         polls = rows_to_dicts(rows)
         for poll in polls:
-            poll["options"] = json.loads(poll["options"])
+            enrich_poll(conn, poll)
         return polls
 
 
@@ -34,7 +55,7 @@ async def create_poll(payload: PollCreate) -> dict:
             (payload.kind, payload.title, json.dumps(options)),
         )
         poll = row_to_dict(conn.execute("SELECT * FROM polls WHERE id = ?", (cur.lastrowid,)).fetchone())
-        poll["options"] = options
+        enrich_poll(conn, poll)
     await hub.broadcast({"type": "poll_created", "poll": poll})
     return poll
 
@@ -60,12 +81,7 @@ async def vote(poll_id: int, payload: VoteCreate) -> dict:
             """,
             (poll_id, payload.user_id, payload.choice),
         )
-        rows = rows_to_dicts(
-            conn.execute(
-                "SELECT choice, COUNT(*) AS votes FROM votes WHERE poll_id = ? GROUP BY choice ORDER BY votes DESC",
-                (poll_id,),
-            ).fetchall()
-        )
+        rows = poll_results(conn, poll_id, options)
     await hub.broadcast({"type": "poll_vote", "poll_id": poll_id, "results": rows})
     return {"poll_id": poll_id, "results": rows}
 

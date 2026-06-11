@@ -55,18 +55,31 @@ async def ws_robot(ws: WebSocket) -> None:
             except json.JSONDecodeError:
                 payload = {"event": "MALFORMED_JSON", "raw": raw}
             await hub.update_robot_state(payload)
-            event = payload.get("event") or payload.get("type")
-            if event:
+            event = payload.get("event")
+            message_type = payload.get("type")
+            stored_event = event or (message_type if message_type != "telemetry" else None)
+            if stored_event:
                 with db() as conn:
                     conn.execute(
                         "INSERT INTO events(source, type, payload) VALUES (?, ?, ?)",
-                        ("robot", str(event), json.dumps(payload)),
+                        ("robot", str(stored_event), json.dumps(payload)),
                     )
             if event == "FINISH_DETECTED":
                 elapsed_ms = int(payload.get("elapsed_ms", 0))
                 obstacle_count = int(payload.get("obstacle_count", hub.robot_state.get("obstacle_count", 0) or 0))
+                crossing_count = int(
+                    payload.get(
+                        "crossing_count",
+                        payload.get("node_count", hub.robot_state.get("crossing_count", hub.robot_state.get("node_count", 0)) or 0),
+                    )
+                )
                 await run.finish_run(
-                    run.RunFinish(reached_finish=True, elapsed_ms=elapsed_ms, obstacle_count=obstacle_count)
+                    run.RunFinish(
+                        reached_finish=True,
+                        elapsed_ms=elapsed_ms,
+                        obstacle_count=obstacle_count,
+                        crossing_count=crossing_count,
+                    )
                 )
     except WebSocketDisconnect:
         await hub.unregister_robot(ws)

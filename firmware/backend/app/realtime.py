@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -18,6 +20,8 @@ class RealtimeHub:
             "last_event": None,
             "obstacle_count": 0,
             "line_position": None,
+            "camera_sign": "NO_SIGN",
+            "camera_transport": None,
             "battery": None,
         }
         self._lock = asyncio.Lock()

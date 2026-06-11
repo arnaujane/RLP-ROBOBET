@@ -1,8 +1,9 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
 $python = Join-Path $root ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
   $python = "python"
 }
-& $python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+& $python .\scripts\simulate_robot.py @args

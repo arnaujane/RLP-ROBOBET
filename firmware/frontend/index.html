@@ -3,153 +3,371 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>RoboBet</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>RoboBet Control</title>
+    <link rel="stylesheet" href="./styles.css?v=20260611-3" />
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1>RoboBet</h1>
-        <p>Maze solver con apuestas ficticias, votaciones y telemetría en vivo</p>
+      <div class="brand">
+        <div class="brand-mark">RB</div>
+        <div>
+          <h1>RoboBet</h1>
+          <p>Panel de robotica, laberinto y participacion en directo</p>
+        </div>
       </div>
-      <div class="connection">
-        <span id="robotDot" class="dot"></span>
-        <span id="robotConnection">Robot offline</span>
+
+      <nav class="view-tabs" aria-label="Pantallas principales">
+        <button class="tab-button active" data-view="admin" type="button">Administrador</button>
+        <button class="tab-button" data-view="user" type="button">Usuario</button>
+      </nav>
+
+      <div class="connection-strip">
+        <span class="status-pill">
+          <span id="backendDot" class="dot"></span>
+          <span id="backendConnection">Backend</span>
+        </span>
+        <span class="status-pill">
+          <span id="robotDot" class="dot"></span>
+          <span id="robotConnection">Robot offline</span>
+        </span>
+        <span class="status-pill">
+          <span id="cameraDot" class="dot"></span>
+          <span id="cameraConnection">Camara offline</span>
+        </span>
+        <span id="dataSourceBadge" class="source-badge">Simulacion</span>
       </div>
     </header>
 
-    <main class="layout">
-      <section class="media-grid">
-        <article class="panel video-panel">
-          <div class="panel-head">
-            <h2>Cámara frontal</h2>
-            <button id="applyFrontUrl" class="small">Aplicar URL</button>
+    <main class="app-shell">
+      <section id="adminScreen" class="screen active" aria-labelledby="adminTitle">
+        <div class="screen-head">
+          <div>
+            <p class="eyebrow">Control tecnico</p>
+            <h2 id="adminTitle">Dashboard de administrador</h2>
           </div>
-          <input id="frontUrl" class="url-input" placeholder="http://esp32cam.local/stream" />
-          <div class="video-box">
-            <img id="frontStream" alt="Stream frontal ESP32-CAM" />
+          <div class="head-actions">
+            <button id="refreshState" class="secondary" type="button">Actualizar</button>
+            <button id="testCamera" type="button">Probar camara</button>
           </div>
-        </article>
-
-        <article class="panel video-panel">
-          <div class="panel-head">
-            <h2>Cámara cenital</h2>
-            <button id="applyOverheadUrl" class="small">Aplicar URL</button>
-          </div>
-          <input id="overheadUrl" class="url-input" placeholder="http://127.0.0.1:8081/video" />
-          <div class="video-box">
-            <img id="overheadStream" alt="Stream cenital móvil/IP camera" />
-          </div>
-        </article>
-      </section>
-
-      <section class="status-grid">
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Estado robot</h2>
-            <button id="refreshState" class="small">Actualizar</button>
-          </div>
-          <dl class="telemetry">
-            <dt>Estado</dt><dd id="robotState">offline</dd>
-            <dt>Algoritmo</dt><dd id="robotAlgorithm">DFS</dd>
-            <dt>Velocidad</dt><dd id="robotSpeed">100%</dd>
-            <dt>Nodo</dt><dd id="robotNode">-</dd>
-            <dt>Obstáculos</dt><dd id="robotObstacles">0</dd>
-            <dt>Último evento</dt><dd id="robotEvent">-</dd>
-          </dl>
-        </article>
-
-        <article class="panel">
-          <h2>Operador</h2>
-          <div class="control-row">
-            <label>
-              Algoritmo
-              <select id="startAlgorithm">
-                <option value="DFS">DFS</option>
-                <option value="BFS">BFS</option>
-              </select>
-            </label>
-            <label>
-              Velocidad
-              <select id="startSpeed">
-                <option value="100">100%</option>
-                <option value="80">80%</option>
-              </select>
-            </label>
-          </div>
-          <div class="button-grid">
-            <button id="startRun">Iniciar</button>
-            <button id="stopRun">Parar</button>
-            <button id="resetRun">Reset</button>
-            <button id="calibrateQtr">Calibrar QTR</button>
-          </div>
-          <p id="operatorMessage" class="message"></p>
-        </article>
-      </section>
-
-      <section class="interaction-grid">
-        <article class="panel user-panel">
-          <h2>Usuario</h2>
-          <div class="inline-form">
-            <input id="userName" placeholder="Nombre" maxlength="32" />
-            <button id="createUser">Entrar</button>
-          </div>
-          <div id="activeUser" class="active-user">Sin usuario</div>
-          <h3>Ranking</h3>
-          <ol id="ranking" class="ranking"></ol>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Apuestas</h2>
-            <button id="placeBet">Apostar</button>
-          </div>
-          <div class="bet-form">
-            <label>
-              Tipo
-              <select id="betKind">
-                <option value="finish">Llega al final</option>
-                <option value="time_range">Tiempo</option>
-                <option value="obstacles">Obstáculos</option>
-                <option value="algorithm">Algoritmo</option>
-              </select>
-            </label>
-            <label>
-              Opción
-              <select id="betChoice"></select>
-            </label>
-            <label>
-              Puntos
-              <input id="betAmount" type="number" min="1" value="50" />
-            </label>
-          </div>
-          <ul id="betsList" class="list"></ul>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Votaciones</h2>
-            <button id="loadPolls">Recargar</button>
-          </div>
-          <div class="poll-actions">
-            <button data-poll-template="algorithm">Crear DFS/BFS</button>
-            <button data-poll-template="speed">Crear 80%</button>
-            <button data-poll-template="obstacle">Crear obstáculo</button>
-          </div>
-          <div id="polls" class="polls"></div>
-        </article>
-      </section>
-
-      <section class="panel log-panel">
-        <div class="panel-head">
-          <h2>Eventos</h2>
-          <button id="clearLog" class="small">Limpiar</button>
         </div>
-        <pre id="eventLog"></pre>
+
+        <section class="admin-hero">
+          <article class="panel state-panel">
+            <div class="state-main">
+              <span id="adminStatePill" class="state-pill warning">En espera</span>
+              <strong id="adminStateText">WAITING_START</strong>
+              <span id="adminAlertText">Sin alertas activas</span>
+            </div>
+            <div class="quick-metrics">
+              <div>
+                <span>Tiempo</span>
+                <strong id="currentTimer">00:00.0</strong>
+              </div>
+              <div>
+                <span>Algoritmo</span>
+                <strong id="activeAlgorithm">DFS</strong>
+              </div>
+              <div>
+                <span>Modo</span>
+                <strong id="activeMode">Explorando</strong>
+              </div>
+              <div>
+                <span>Nodo</span>
+                <strong id="activeNode">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel operator-panel">
+            <div class="panel-head">
+              <h3>Operador</h3>
+              <span id="operatorMessage" class="message"></span>
+            </div>
+            <div class="control-row">
+              <label>
+                Algoritmo
+                <select id="startAlgorithm">
+                  <option value="DFS">DFS</option>
+                  <option value="BFS">BFS</option>
+                </select>
+              </label>
+              <label>
+                Potencia
+                <select id="startSpeed">
+                  <option value="100">100%</option>
+                  <option value="80">80%</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-grid">
+              <button id="startRun" type="button">Iniciar</button>
+              <button id="stopRun" class="danger" type="button">Parar</button>
+              <button id="resetRun" class="secondary" type="button">Reset</button>
+              <button id="calibrateQtr" class="secondary" type="button">Calibrar QTR</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="camera-grid">
+          <article class="panel video-panel wide">
+            <div class="panel-head">
+              <h3>Camara frontal</h3>
+              <span id="frontStatus" class="stream-status">Sin imagen</span>
+            </div>
+            <div class="url-row">
+              <input id="frontUrl" class="url-input" placeholder="http://192.168.1.56/stream" />
+              <button id="applyFrontUrl" class="small" type="button">Aplicar</button>
+            </div>
+            <div class="video-box">
+              <img id="frontStream" alt="Stream frontal ESP32-CAM" />
+            </div>
+          </article>
+
+          <article class="panel video-panel">
+            <div class="panel-head">
+              <h3>Camara cenital</h3>
+              <span id="overheadStatus" class="stream-status">Sin imagen</span>
+            </div>
+            <div class="url-row">
+              <input id="overheadUrl" class="url-input" placeholder="http://127.0.0.1:8081/video" />
+              <button id="applyOverheadUrl" class="small" type="button">Aplicar</button>
+            </div>
+            <div class="video-box">
+              <img id="overheadStream" alt="Stream cenital del laberinto" />
+            </div>
+          </article>
+        </section>
+
+        <section class="admin-grid">
+          <article class="panel sensor-panel">
+            <div class="panel-head">
+              <h3>Sensores infrarrojos</h3>
+              <span id="sensorSource" class="source-badge compact">Simulacion</span>
+            </div>
+            <div id="sensorBoard" class="sensor-board" aria-live="polite"></div>
+            <div class="sensor-meta">
+              <span id="sensorSummary">0/8 activos</span>
+              <span>Umbral <strong id="sensorThreshold">2500</strong></span>
+            </div>
+            <div id="qtrValues" class="sensor-values"></div>
+          </article>
+
+          <article class="panel camera-detect-panel">
+            <div class="panel-head">
+              <h3>Deteccion de camara</h3>
+              <span id="cameraTransport">HTTP preparado</span>
+            </div>
+            <div id="cameraSignBadge" class="sign-result" data-sign="NO_SIGN">NO_SIGN</div>
+            <div class="confidence-row">
+              <span>Confianza</span>
+              <div class="progress"><span id="cameraConfidenceBar"></span></div>
+              <strong id="cameraConfidenceText">0%</strong>
+            </div>
+            <dl class="telemetry compact">
+              <dt>Motivo</dt><dd id="cameraReason">-</dd>
+              <dt>Votos</dt><dd id="cameraVotes">-</dd>
+            </dl>
+          </article>
+
+          <article class="panel motor-panel">
+            <div class="panel-head">
+              <h3>Potencia de motores</h3>
+              <span id="speedLimitBadge" class="restriction-badge">100%</span>
+            </div>
+            <div class="motor-gauges">
+              <div class="gauge">
+                <div class="gauge-ring" style="--value: 0">
+                  <span id="motorLeftValue">0%</span>
+                </div>
+                <strong>Izquierdo</strong>
+              </div>
+              <div class="gauge">
+                <div class="gauge-ring" style="--value: 0">
+                  <span id="motorRightValue">0%</span>
+                </div>
+                <strong>Derecho</strong>
+              </div>
+            </div>
+            <div class="motor-bars">
+              <div><span id="motorLeftBar"></span></div>
+              <div><span id="motorRightBar"></span></div>
+            </div>
+          </article>
+
+          <article class="panel algorithm-panel">
+            <h3>Algoritmo activo</h3>
+            <div class="algorithm-card">
+              <strong id="algorithmName">DFS</strong>
+              <span id="algorithmPhase">Explorando</span>
+            </div>
+            <div class="progress tall"><span id="algorithmProgress"></span></div>
+            <dl class="telemetry compact">
+              <dt>Ruta</dt><dd id="mazeRouteState">En espera</dd>
+              <dt>Cruces</dt><dd id="mazeCrossings">0</dd>
+            </dl>
+          </article>
+
+          <article class="panel obstacle-panel">
+            <h3>Obstaculos</h3>
+            <div class="obstacle-state">
+              <strong id="obstacleStatus">Sin obstaculos activos</strong>
+              <span id="obstacleType">Fisico o virtual</span>
+            </div>
+            <dl class="telemetry compact">
+              <dt>Detectados</dt><dd id="obstacleCount">0</dd>
+              <dt>Camara</dt><dd id="robotCameraState">NO_SIGN</dd>
+            </dl>
+          </article>
+
+          <article class="panel maze-panel">
+            <h3>Laberinto actual</h3>
+            <dl class="metric-list">
+              <div><dt>Tiempo</dt><dd id="mazeTimer">00:00.0</dd></div>
+              <div><dt>Algoritmo</dt><dd id="mazeAlgorithm">DFS</dd></div>
+              <div><dt>Obstaculos</dt><dd id="mazeObstacles">0</dd></div>
+              <div><dt>Estado</dt><dd id="mazeState">En espera</dd></div>
+            </dl>
+          </article>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="panel-head">
+            <h3>Eventos</h3>
+            <button id="clearLog" class="small secondary" type="button">Limpiar</button>
+          </div>
+          <pre id="eventLog"></pre>
+        </section>
+      </section>
+
+      <section id="userScreen" class="screen" aria-labelledby="userTitle">
+        <div class="screen-head">
+          <div>
+            <p class="eyebrow">Vista publica</p>
+            <h2 id="userTitle">Pantalla de usuario</h2>
+          </div>
+          <article class="twitch-card">
+            <div id="twitchAvatar" class="avatar">TW</div>
+            <div>
+              <strong id="twitchName">Sin sesion Twitch</strong>
+              <span id="twitchMeta">OAuth preparado</span>
+            </div>
+            <button id="twitchLogin" type="button">Iniciar sesion con Twitch</button>
+            <button id="twitchLogout" class="secondary hidden" type="button">Salir</button>
+          </article>
+        </div>
+
+        <section class="viewer-grid">
+          <article class="panel video-panel viewer-main">
+            <div class="panel-head">
+              <h3>Camara cenital</h3>
+              <span id="userOverheadStatus" class="stream-status">Sin imagen</span>
+            </div>
+            <div class="video-box large">
+              <img id="userOverheadStream" alt="Vista cenital del laberinto" />
+            </div>
+          </article>
+
+          <article class="panel video-panel">
+            <div class="panel-head">
+              <h3>Camara del robot</h3>
+              <span id="userFrontStatus" class="stream-status">Sin imagen</span>
+            </div>
+            <div class="video-box">
+              <img id="userFrontStream" alt="Vista en primera persona del robot" />
+            </div>
+          </article>
+        </section>
+
+        <section class="viewer-status">
+          <article class="panel live-card">
+            <h3>Directo del laberinto</h3>
+            <dl class="metric-list">
+              <div><dt>Tiempo</dt><dd id="liveTime">00:00.0</dd></div>
+              <div><dt>Algoritmo</dt><dd id="liveAlgorithm">DFS</dd></div>
+              <div><dt>Restricciones</dt><dd id="liveRestrictions">Sin restricciones</dd></div>
+              <div><dt>Obstaculos</dt><dd id="liveObstacles">0</dd></div>
+              <div><dt>Estado</dt><dd id="liveRobotState">En espera</dd></div>
+            </dl>
+          </article>
+
+          <article class="panel user-panel">
+            <h3>Cuenta RoboBet</h3>
+            <div class="inline-form">
+              <input id="userName" placeholder="Nombre" maxlength="32" />
+              <button id="createUser" type="button">Entrar</button>
+            </div>
+            <div id="activeUser" class="active-user">Sin usuario</div>
+            <div id="userActivity" class="user-activity">Sin actividad registrada</div>
+            <h4>Ranking</h4>
+            <ol id="ranking" class="ranking"></ol>
+          </article>
+
+          <article class="panel interaction-panel">
+            <div class="panel-head">
+              <h3>Apuestas</h3>
+              <button id="placeBet" type="button">Apostar</button>
+            </div>
+            <div class="bet-form">
+              <label>
+                Tipo
+                <select id="betKind">
+                  <option value="finish">Llega al final</option>
+                  <option value="time_range">Tiempo</option>
+                  <option value="obstacles">Obstaculos</option>
+                  <option value="algorithm">Algoritmo</option>
+                </select>
+              </label>
+              <label>
+                Opcion
+                <select id="betChoice"></select>
+              </label>
+              <label>
+                Puntos
+                <input id="betAmount" type="number" min="1" value="50" />
+              </label>
+            </div>
+            <ul id="betsList" class="list"></ul>
+          </article>
+
+          <article class="panel poll-panel">
+            <div class="panel-head">
+              <h3>Votaciones</h3>
+              <button id="loadPolls" class="small secondary" type="button">Recargar</button>
+            </div>
+            <div class="poll-actions">
+              <button data-poll-template="algorithm" type="button">Crear DFS/BFS</button>
+              <button data-poll-template="speed" type="button">Crear 80%</button>
+              <button data-poll-template="obstacle" type="button">Crear obstaculo</button>
+            </div>
+            <div id="polls" class="polls"></div>
+          </article>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="panel-head">
+            <h3>Ultimos laberintos</h3>
+            <span id="historySource" class="source-badge compact">API</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Tiempo</th>
+                  <th>Algoritmo</th>
+                  <th>Obstaculos</th>
+                  <th>Cruces</th>
+                  <th>Resultado</th>
+                  <th>Restricciones</th>
+                </tr>
+              </thead>
+              <tbody id="historyRows"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
     </main>
 
-    <script src="/app.js"></script>
+    <script src="./app.js?v=20260611-3"></script>
   </body>
 </html>
-
