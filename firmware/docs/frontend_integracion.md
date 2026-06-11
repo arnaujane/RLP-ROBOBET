@@ -78,8 +78,10 @@ robobet_overhead_url
 La camara frontal actual suele ser:
 
 ```text
-http://IP_ESP32_CAM/stream
+http://IP_ESP32_CAM/snapshot
 ```
+
+La ESP32-CAM tambien mantiene `/stream`, pero conviene reservarlo para diagnostico corto. En la web se usa `/snapshot` con refresco automatico para no bloquear `/detect` mientras el robot decide si una mancha negra es paso, bloqueo o final.
 
 Para camara cenital se puede usar cualquier fuente MJPEG o IP camera compatible con `<img>`.
 

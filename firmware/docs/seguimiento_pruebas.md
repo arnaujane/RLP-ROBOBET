@@ -318,6 +318,50 @@ list[str] | None
 - Listo para prueba fisica controlada.
 - Pendiente flashear WROOM con el cambio de `crossing_count` si se quiere registrar ese campo desde el robot real.
 
+## 2026-06-11 - Calidad Y Estabilidad De La ESP32-CAM Frontal
+
+### Sintoma
+
+- La camara frontal podia mostrar ruido, colores verdosos/morados, lineas horizontales o frames con aspecto corrupto.
+- Cuando la web mantenia abierto `/stream`, las llamadas a `/detect` y `/status` podian tardar demasiado o fallar.
+
+### Diagnostico
+
+- La ESP32-CAM usa `WebServer`, que atiende peticiones de forma sincronica.
+- Un MJPEG continuo en `/stream` mantiene la conexion abierta y puede bloquear otras rutas HTTP importantes.
+- La camara trabajaba con captura RGB565 y conversion a JPEG en cada frame; con alimentacion justa, baja luz o WiFi debil, esto aumenta artefactos y latencia.
+
+### Implementacion Aplicada
+
+- Firmware ESP32-CAM:
+  - `CAMERA_XCLK_FREQ_HZ` por defecto en `10000000` para priorizar estabilidad.
+  - Resolucion conservadora `FRAMESIZE_QVGA`.
+  - Un unico framebuffer para evitar frames pisados.
+  - JPEG de snapshot en calidad `82`.
+  - Deteccion de frames incompletos/corruptos antes de procesar o convertir.
+  - Contadores de salud: `capture_failures`, `consecutive_failures`, `corrupt_frames`, `camera_ready`, `camera_health`.
+  - Recuperacion automatica con `esp_camera_deinit()` + nueva inicializacion tras fallos consecutivos.
+  - Deteccion de fondo menos agresiva para no saturar la camara.
+  - `/stream` queda para diagnostico corto; la web usa `/snapshot`.
+- Backend:
+  - Default frontal cambiado a `http://192.168.1.56/snapshot`.
+  - Errores de socket/camara se devuelven como `504`, no como `500`.
+- Frontend:
+  - La camara frontal usa snapshots con refresco, cache-busting y reconexion automatica.
+  - Si falla la imagen se muestra placeholder profesional y estado `Reconectando`/`Sin imagen`.
+  - Se muestran FPS y calidad de camara.
+
+### Resultado
+
+- `/api/streams/camera/status` devuelve `camera_ready=true` y `camera_health=ok`.
+- `/snapshot` devuelve JPEG valido.
+- `/detect` vuelve a responder sin bloquearse por el stream de la web.
+
+### Estado
+
+- Cerrado a nivel software.
+- Si reaparecen artefactos, revisar alimentacion estable a 5 V, masa comun, cable de camara, iluminacion del laberinto, WiFi y vibraciones del soporte.
+
 ## Plantilla Para Nuevas Incidencias
 
 ```text

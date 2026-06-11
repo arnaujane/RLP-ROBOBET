@@ -34,6 +34,26 @@
 #define CAMERA_SERIAL_REPORTS 0
 #endif
 
+#ifndef CAMERA_XCLK_FREQ_HZ
+#define CAMERA_XCLK_FREQ_HZ 10000000
+#endif
+
+#ifndef CAMERA_FRAME_SIZE
+#define CAMERA_FRAME_SIZE FRAMESIZE_QVGA
+#endif
+
+#ifndef CAMERA_JPEG_QUALITY
+#define CAMERA_JPEG_QUALITY 82
+#endif
+
+#ifndef CAMERA_STREAM_DELAY_MS
+#define CAMERA_STREAM_DELAY_MS 90
+#endif
+
+#ifndef CAMERA_STREAM_MAX_MS
+#define CAMERA_STREAM_MAX_MS 12000
+#endif
+
 // AI Thinker ESP32-CAM pinout.
 #define PWDN_GPIO_NUM 32
 #define RESET_GPIO_NUM -1
@@ -53,10 +73,11 @@
 #define PCLK_GPIO_NUM 22
 
 static constexpr uint32_t SIGN_REPORT_INTERVAL_MS = 400;
-static constexpr uint8_t DETECT_SAMPLE_COUNT = 5;
-static constexpr uint32_t DETECT_SAMPLE_DELAY_MS = 90;
+static constexpr uint8_t DETECT_SAMPLE_COUNT = 3;
+static constexpr uint32_t DETECT_SAMPLE_DELAY_MS = 80;
 static constexpr uint32_t DETECT_FIRST_SAMPLE_DELAY_MS = 35;
-static constexpr uint32_t BACKGROUND_DETECT_INTERVAL_MS = 250;
+static constexpr uint32_t BACKGROUND_DETECT_INTERVAL_MS = 900;
+static constexpr uint8_t MAX_CONSECUTIVE_CAPTURE_FAILURES = 6;
 static constexpr uint8_t ROI_LEFT_PERCENT = 20;
 static constexpr uint8_t ROI_RIGHT_PERCENT = 80;
 static constexpr uint8_t ROI_TOP_PERCENT = 15;
@@ -70,11 +91,19 @@ WebServer server(80);
 
 String lastSign = "NO_SIGN";
 String networkMode = "booting";
+String cameraHealth = "booting";
 uint32_t lastSignReportMs = 0;
 uint32_t lastBackgroundDetectMs = 0;
+uint32_t lastCaptureOkMs = 0;
+uint32_t lastRecoveryAttemptMs = 0;
 uint32_t frameCounter = 0;
 uint32_t lastFpsWindowMs = 0;
 float fps = 0.0f;
+bool cameraReady = false;
+uint32_t cameraInitFailures = 0;
+uint32_t captureFailures = 0;
+uint32_t corruptFrames = 0;
+uint8_t consecutiveCaptureFailures = 0;
 uint32_t lastRedPixels = 0;
 uint32_t lastGreenPixels = 0;
 uint32_t lastBlackPixels = 0;
@@ -247,6 +276,38 @@ String updateSign(camera_fb_t *fb) {
   return detected;
 }
 
+size_t expectedRgb565Length(const camera_fb_t *fb) {
+  if (!fb) {
+    return 0;
+  }
+  return static_cast<size_t>(fb->width) * static_cast<size_t>(fb->height) * 2;
+}
+
+bool frameLooksValid(const camera_fb_t *fb) {
+  if (!fb || !fb->buf || fb->len == 0 || fb->width == 0 || fb->height == 0) {
+    return false;
+  }
+  if (fb->format != PIXFORMAT_RGB565) {
+    return false;
+  }
+  return fb->len >= expectedRgb565Length(fb);
+}
+
+void recordCaptureFailure(bool corrupt = false) {
+  captureFailures++;
+  consecutiveCaptureFailures++;
+  cameraHealth = corrupt ? "corrupt_frame" : "capture_failed";
+  if (corrupt) {
+    corruptFrames++;
+  }
+}
+
+void recordCaptureOk() {
+  consecutiveCaptureFailures = 0;
+  lastCaptureOkMs = millis();
+  cameraHealth = "ok";
+}
+
 void updateFps() {
   frameCounter++;
   uint32_t now = millis();
@@ -258,15 +319,49 @@ void updateFps() {
   }
 }
 
+bool setupCamera();
+
+void recoverCameraIfNeeded() {
+  if (consecutiveCaptureFailures < MAX_CONSECUTIVE_CAPTURE_FAILURES) {
+    return;
+  }
+  if (millis() - lastRecoveryAttemptMs < 3000) {
+    return;
+  }
+
+  lastRecoveryAttemptMs = millis();
+  cameraHealth = "recovering";
+  cameraReady = false;
+  esp_camera_deinit();
+  delay(160);
+  cameraReady = setupCamera();
+}
+
 bool captureAndUpdateSign(String *detected = nullptr) {
+  if (!cameraReady) {
+    recordCaptureFailure();
+    recoverCameraIfNeeded();
+    return false;
+  }
+
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
+    recordCaptureFailure();
+    recoverCameraIfNeeded();
+    return false;
+  }
+
+  if (!frameLooksValid(fb)) {
+    esp_camera_fb_return(fb);
+    recordCaptureFailure(true);
+    recoverCameraIfNeeded();
     return false;
   }
 
   String sign = updateSign(fb);
   updateFps();
   esp_camera_fb_return(fb);
+  recordCaptureOk();
 
   if (detected != nullptr) {
     *detected = sign;
@@ -278,20 +373,50 @@ bool captureJpeg(uint8_t **jpg, size_t *jpgLen) {
   *jpg = nullptr;
   *jpgLen = 0;
 
+  if (!cameraReady) {
+    recordCaptureFailure();
+    recoverCameraIfNeeded();
+    return false;
+  }
+
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
+    recordCaptureFailure();
+    recoverCameraIfNeeded();
+    return false;
+  }
+
+  if (!frameLooksValid(fb)) {
+    esp_camera_fb_return(fb);
+    recordCaptureFailure(true);
+    recoverCameraIfNeeded();
     return false;
   }
 
   updateSign(fb);
   updateFps();
 
-  bool ok = frame2jpg(fb, 78, jpg, jpgLen);
+  bool ok = frame2jpg(fb, CAMERA_JPEG_QUALITY, jpg, jpgLen);
   esp_camera_fb_return(fb);
-  return ok && *jpg != nullptr && *jpgLen > 0;
+  if (ok && *jpg != nullptr && *jpgLen > 0) {
+    recordCaptureOk();
+    return true;
+  }
+
+  recordCaptureFailure();
+  if (*jpg != nullptr) {
+    free(*jpg);
+    *jpg = nullptr;
+  }
+  *jpgLen = 0;
+  recoverCameraIfNeeded();
+  return false;
 }
 
 void discardStaleFrame() {
+  if (!cameraReady) {
+    return;
+  }
   camera_fb_t *fb = esp_camera_fb_get();
   if (fb) {
     esp_camera_fb_return(fb);
@@ -393,6 +518,8 @@ void sendJsonResponse(const String &body) {
 }
 
 bool setupCamera() {
+  cameraReady = false;
+
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -412,15 +539,18 @@ bool setupCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = CAMERA_XCLK_FREQ_HZ;
   config.pixel_format = PIXFORMAT_RGB565;
-  config.frame_size = FRAMESIZE_QVGA;
-  config.jpeg_quality = 12;
-  config.fb_count = 2;
-  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.frame_size = CAMERA_FRAME_SIZE;
+  config.jpeg_quality = 14;
+  config.fb_count = 1;
+  config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
+    cameraInitFailures++;
+    cameraHealth = "init_failed";
     return false;
   }
 
@@ -428,22 +558,50 @@ bool setupCamera() {
   if (sensor) {
     sensor->set_brightness(sensor, 0);
     sensor->set_contrast(sensor, 1);
-    sensor->set_saturation(sensor, 1);
+    sensor->set_saturation(sensor, -1);
+    sensor->set_sharpness(sensor, -1);
+    sensor->set_denoise(sensor, 1);
+    sensor->set_special_effect(sensor, 0);
     sensor->set_whitebal(sensor, 1);
     sensor->set_awb_gain(sensor, 1);
+    sensor->set_wb_mode(sensor, 0);
     sensor->set_exposure_ctrl(sensor, 1);
+    sensor->set_aec2(sensor, 1);
+    sensor->set_ae_level(sensor, 0);
+    sensor->set_gain_ctrl(sensor, 1);
+    sensor->set_gainceiling(sensor, GAINCEILING_8X);
+    sensor->set_bpc(sensor, 1);
+    sensor->set_wpc(sensor, 1);
+    sensor->set_raw_gma(sensor, 1);
+    sensor->set_lenc(sensor, 1);
+    sensor->set_dcw(sensor, 1);
   }
+  cameraReady = true;
+  cameraHealth = "ok";
+  lastCaptureOkMs = millis();
   return true;
 }
 
 void handleStatus() {
   JsonDocument doc;
   addDetectionFields(doc);
+  doc["camera_ready"] = cameraReady;
+  doc["camera_health"] = cameraHealth;
+  doc["capture_failures"] = captureFailures;
+  doc["consecutive_failures"] = consecutiveCaptureFailures;
+  doc["corrupt_frames"] = corruptFrames;
+  doc["camera_init_failures"] = cameraInitFailures;
   doc["fps"] = fps;
   doc["wifi"] = WiFi.status() == WL_CONNECTED ? "connected" : "disconnected";
   doc["ip"] = WiFi.localIP().toString();
   doc["mode"] = networkMode;
   doc["hostname"] = "esp32cam.local";
+  doc["xclk_hz"] = CAMERA_XCLK_FREQ_HZ;
+  doc["jpeg_quality"] = CAMERA_JPEG_QUALITY;
+  doc["stream_delay_ms"] = CAMERA_STREAM_DELAY_MS;
+  doc["frame_width"] = 320;
+  doc["frame_height"] = 240;
+  doc["pixel_format"] = "RGB565";
   String body;
   serializeJson(doc, body);
   sendJsonResponse(body);
@@ -453,10 +611,23 @@ void handleRoot() {
   server.send(
       200,
       "text/html",
-      "<html><body><h1>RoboBet ESP32-CAM</h1><p><a href='/stream'>stream</a></p><p><a href='/snapshot'>snapshot</a></p><p><a href='/status'>status</a></p><p><a href='/detect'>detect</a></p></body></html>");
+      "<html><body><h1>RoboBet ESP32-CAM</h1><p>Use /snapshot for the dashboard and /detect for robot decisions. /stream is available for short diagnostics.</p><p><a href='/snapshot'>snapshot</a></p><p><a href='/stream'>stream</a></p><p><a href='/status'>status</a></p><p><a href='/detect'>detect</a></p></body></html>");
 }
 
 void handleDetect() {
+  if (!cameraReady) {
+    JsonDocument doc;
+    addDetectionFields(doc);
+    doc["sign"] = "NO_SIGN";
+    doc["confidence"] = 0;
+    doc["reason"] = cameraHealth;
+    String body;
+    serializeJson(doc, body);
+    sendJsonResponse(body);
+    recoverCameraIfNeeded();
+    return;
+  }
+
   String sign = detectSignFromSamples();
   (void)sign;
 
@@ -473,7 +644,7 @@ void handleSnapshot() {
   size_t jpgLen = 0;
 
   if (!captureJpeg(&jpg, &jpgLen)) {
-    server.send(503, "text/plain", "camera capture failed");
+    server.send(503, "text/plain", cameraHealth);
     return;
   }
 
@@ -489,6 +660,7 @@ void handleSnapshot() {
 
 void handleStream() {
   WiFiClient client = server.client();
+  uint32_t streamStartMs = millis();
   client.print("HTTP/1.1 200 OK\r\n");
   client.print("Content-Type: multipart/x-mixed-replace; boundary=frame\r\n");
   client.print("Cache-Control: no-cache\r\n");
@@ -496,7 +668,7 @@ void handleStream() {
   client.print("Access-Control-Allow-Origin: *\r\n");
   client.print("Connection: close\r\n\r\n");
 
-  while (client.connected()) {
+  while (client.connected() && millis() - streamStartMs < CAMERA_STREAM_MAX_MS) {
     uint8_t *jpg = nullptr;
     size_t jpgLen = 0;
     if (!captureJpeg(&jpg, &jpgLen)) {
@@ -512,7 +684,7 @@ void handleStream() {
     if (!client.connected()) {
       break;
     }
-    delay(35);
+    delay(CAMERA_STREAM_DELAY_MS);
   }
 }
 
@@ -599,6 +771,10 @@ void handleSerialCommands() {
 }
 
 void updateBackgroundDetection() {
+  if (!cameraReady) {
+    recoverCameraIfNeeded();
+    return;
+  }
   if (millis() - lastBackgroundDetectMs < BACKGROUND_DETECT_INTERVAL_MS) {
     return;
   }
@@ -621,7 +797,7 @@ void setup() {
   // ignore boot messages and use only DETECT responses after startup.
   Serial.begin(115200);
   connectWiFi();
-  setupCamera();
+  cameraReady = setupCamera();
   setupServer();
   lastFpsWindowMs = millis();
   reportSign(true);

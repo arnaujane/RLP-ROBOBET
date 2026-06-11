@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RoboBet Control</title>
-    <link rel="stylesheet" href="./styles.css?v=20260611-3" />
+    <link rel="stylesheet" href="./styles.css?v=20260611-4" />
   </head>
   <body>
     <header class="topbar">
@@ -115,7 +115,7 @@
               <span id="frontStatus" class="stream-status">Sin imagen</span>
             </div>
             <div class="url-row">
-              <input id="frontUrl" class="url-input" placeholder="http://192.168.1.56/stream" />
+              <input id="frontUrl" class="url-input" placeholder="http://192.168.1.56/snapshot" />
               <button id="applyFrontUrl" class="small" type="button">Aplicar</button>
             </div>
             <div class="video-box">
@@ -165,6 +165,8 @@
             </div>
             <dl class="telemetry compact">
               <dt>Motivo</dt><dd id="cameraReason">-</dd>
+              <dt>FPS</dt><dd id="cameraFps">-</dd>
+              <dt>Calidad</dt><dd id="cameraQuality">-</dd>
               <dt>Votos</dt><dd id="cameraVotes">-</dd>
             </dl>
           </article>
@@ -368,6 +370,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260611-3"></script>
+    <script src="./app.js?v=20260611-4"></script>
   </body>
 </html>

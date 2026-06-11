@@ -1,11 +1,17 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 const STREAM_DEFAULTS = {
-  front: "http://192.168.1.56/stream",
+  front: "http://192.168.1.56/snapshot",
   overhead: "http://127.0.0.1:8081/video",
 };
-const STALE_FRONT_URLS = new Set(["http://192.168.4.2/stream", "http://esp32cam.local/stream"]);
+const STALE_FRONT_URLS = new Set([
+  "http://192.168.4.2/stream",
+  "http://esp32cam.local/stream",
+  "http://192.168.1.56/stream",
+]);
 const SENSOR_COUNT = 8;
 const DEFAULT_QTR_THRESHOLD = 2500;
+const FRONT_SNAPSHOT_INTERVAL_MS = 420;
+const FRONT_SNAPSHOT_TIMEOUT_MS = 1800;
 
 const state = {
   backendOnline: false,
@@ -33,6 +39,8 @@ const state = {
     reason: "-",
     votes: {},
   },
+  streamTimers: {},
+  streamFailures: {},
   counters: {
     crossings: 0,
     lastNode: null,
@@ -351,6 +359,8 @@ function renderCamera() {
   setText("cameraConfidenceText", `${confidence}%`);
   setText("cameraReason", reason);
   setText("cameraVotes", formatVotes(state.camera.votes));
+  setText("cameraFps", formatCameraFps(state.camera.fps));
+  setText("cameraQuality", cameraQualityLabel(state.camera));
   setText("cameraTransport", state.robot.camera_transport ? String(state.robot.camera_transport).toUpperCase() : "HTTP preparado");
   setText("robotCameraState", sign);
 }
@@ -410,6 +420,21 @@ function renderDashboard() {
 
 function formatVotes(votes = {}) {
   return `R ${votes.red ?? 0} - V ${votes.green ?? 0} - N ${votes.black ?? 0} - sin ${votes.none ?? 0}`;
+}
+
+function formatCameraFps(value) {
+  const fps = Number(value);
+  return Number.isFinite(fps) && fps > 0 ? `${fps.toFixed(1)} fps` : "-";
+}
+
+function cameraQualityLabel(camera = state.camera) {
+  if (!camera.online) return "Sin conexion";
+  const failures = Number(camera.consecutive_failures ?? camera.consecutiveFailures ?? 0);
+  const corrupt = Number(camera.corrupt_frames ?? camera.corruptFrames ?? 0);
+  const fps = Number(camera.fps ?? 0);
+  if (failures >= 2) return "Reconectando";
+  if (corrupt > 0 || (fps > 0 && fps < 2)) return "Degradada";
+  return "Estable";
 }
 
 function setCameraOffline(reason = "Sin respuesta") {
@@ -786,22 +811,110 @@ function getStoredStreamUrl(storageKey, defaultUrl, staleUrls = new Set()) {
   return stored;
 }
 
-function setImageSource(imageId, statusId, url) {
+function normalizeFrontCameraUrl(rawUrl) {
+  const value = (rawUrl || STREAM_DEFAULTS.front).trim();
+  if (!value) return STREAM_DEFAULTS.front;
+  return value.replace(/\/stream([?#].*)?$/i, "/snapshot");
+}
+
+function withCacheBust(url) {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}t=${Date.now()}`;
+}
+
+function setVideoState(imageId, statusId, text, level = "loading") {
   const image = $(imageId);
   const status = $(statusId);
+  if (status) {
+    status.textContent = text;
+    status.classList.toggle("online", level === "online");
+    status.classList.toggle("warning", level === "warning");
+    status.classList.toggle("error", level === "error");
+  }
+  const box = image?.closest(".video-box");
+  if (box) {
+    box.classList.toggle("stream-offline", level === "error" || level === "warning");
+    box.dataset.placeholder = text;
+  }
+}
+
+function setImageSource(imageId, statusId, url) {
+  const image = $(imageId);
   if (!image) return;
-  if (status) status.textContent = "Cargando";
+  setVideoState(imageId, statusId, "Cargando", "loading");
   image.removeAttribute("src");
   image.src = url;
 }
 
+function stopStreamTimer(key) {
+  if (state.streamTimers[key]) {
+    clearTimeout(state.streamTimers[key]);
+    delete state.streamTimers[key];
+  }
+}
+
+function startFrontSnapshotLoop(url) {
+  stopStreamTimer("front");
+
+  const loadFrame = () => {
+    const requestUrl = withCacheBust(url);
+    const preload = new Image();
+    let settled = false;
+
+    const schedule = (delay = FRONT_SNAPSHOT_INTERVAL_MS) => {
+      state.streamTimers.front = setTimeout(loadFrame, delay);
+    };
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      state.streamFailures.front = (state.streamFailures.front || 0) + 1;
+      setVideoState("frontStream", "frontStatus", "Reconectando", "warning");
+      setVideoState("userFrontStream", "userFrontStatus", "Reconectando", "warning");
+      schedule(Math.min(1600, FRONT_SNAPSHOT_INTERVAL_MS + state.streamFailures.front * 180));
+    }, FRONT_SNAPSHOT_TIMEOUT_MS);
+
+    preload.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      state.streamFailures.front = 0;
+      const frontImage = $("frontStream");
+      const userFrontImage = $("userFrontStream");
+      if (frontImage) frontImage.src = requestUrl;
+      if (userFrontImage) userFrontImage.src = requestUrl;
+      setVideoState("frontStream", "frontStatus", "Activo", "online");
+      setVideoState("userFrontStream", "userFrontStatus", "Activo", "online");
+      schedule();
+    };
+
+    preload.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      state.streamFailures.front = (state.streamFailures.front || 0) + 1;
+      const text = state.streamFailures.front > 4 ? "Sin imagen" : "Reconectando";
+      const level = state.streamFailures.front > 4 ? "error" : "warning";
+      setVideoState("frontStream", "frontStatus", text, level);
+      setVideoState("userFrontStream", "userFrontStatus", text, level);
+      schedule(Math.min(2200, FRONT_SNAPSHOT_INTERVAL_MS + state.streamFailures.front * 250));
+    };
+
+    preload.src = requestUrl;
+  };
+
+  setVideoState("frontStream", "frontStatus", "Cargando", "loading");
+  setVideoState("userFrontStream", "userFrontStatus", "Cargando", "loading");
+  loadFrame();
+}
+
 function applyStreams() {
-  const front = getStoredStreamUrl("robobet_front_url", STREAM_DEFAULTS.front, STALE_FRONT_URLS);
+  const front = normalizeFrontCameraUrl(getStoredStreamUrl("robobet_front_url", STREAM_DEFAULTS.front, STALE_FRONT_URLS));
   const overhead = getStoredStreamUrl("robobet_overhead_url", STREAM_DEFAULTS.overhead);
+  localStorage.setItem("robobet_front_url", front);
   $("frontUrl").value = front;
   $("overheadUrl").value = overhead;
-  setImageSource("frontStream", "frontStatus", front);
-  setImageSource("userFrontStream", "userFrontStatus", front);
+  startFrontSnapshotLoop(front);
   setImageSource("overheadStream", "overheadStatus", overhead);
   setImageSource("userOverheadStream", "userOverheadStatus", overhead);
 }
@@ -990,7 +1103,7 @@ function bindEvents() {
   $("clearLog").addEventListener("click", () => { $("eventLog").textContent = ""; });
 
   $("applyFrontUrl").addEventListener("click", () => {
-    localStorage.setItem("robobet_front_url", $("frontUrl").value.trim());
+    localStorage.setItem("robobet_front_url", normalizeFrontCameraUrl($("frontUrl").value));
     applyStreams();
     safeLoad("Estado camara", refreshCameraStatus);
   });

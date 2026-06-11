@@ -75,7 +75,7 @@ docs/resumen_implementacion.md
 
 1. Encender powerbank de 5 V y bateria de motores.
 2. Arrancar backend.
-3. Encender ESP32-CAM y comprobar `http://IP_CAM/stream`.
+3. Encender ESP32-CAM y comprobar `http://IP_CAM/status` y `http://IP_CAM/snapshot`.
 4. Encender robot y esperar que aparezca como conectado.
 5. Calibrar QTR desde la web.
 6. Crear usuarios.

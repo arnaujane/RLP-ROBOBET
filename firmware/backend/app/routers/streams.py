@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/streams", tags=["streams"])
 
-DEFAULT_FRONT_STREAM = "http://192.168.1.56/stream"
+DEFAULT_FRONT_STREAM = "http://192.168.1.56/snapshot"
 DEFAULT_OVERHEAD_STREAM = "http://127.0.0.1:8081/video"
 
 
@@ -35,7 +35,7 @@ def get_camera_json(stream_url: Optional[str], endpoint: str, timeout: float = 4
             payload = response.read().decode("utf-8")
     except HTTPError as error:
         raise HTTPException(error.code, f"Camera returned HTTP {error.code}") from error
-    except (TimeoutError, URLError) as error:
+    except (TimeoutError, URLError, OSError) as error:
         message = str(error).strip() or "timeout"
         raise HTTPException(504, f"Camera unavailable: {message}") from error
 

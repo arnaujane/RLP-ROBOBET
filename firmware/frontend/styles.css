@@ -240,6 +240,21 @@ label {
   color: var(--muted);
 }
 
+.stream-status.online {
+  background: #e2f7ed;
+  color: #0b7444;
+}
+
+.stream-status.warning {
+  background: #fff1d5;
+  color: #9a6400;
+}
+
+.stream-status.error {
+  background: #ffe4df;
+  color: #a62d21;
+}
+
 .restriction-badge {
   background: #e9f7f4;
   color: #0d6d66;
@@ -480,6 +495,7 @@ label {
   margin-top: 12px;
   overflow: hidden;
   place-items: center;
+  position: relative;
 }
 
 .video-box.large {
@@ -490,6 +506,22 @@ label {
   height: 100%;
   object-fit: contain;
   width: 100%;
+}
+
+.video-box.stream-offline::after {
+  align-items: center;
+  background: linear-gradient(180deg, rgba(7, 16, 20, 0.78), rgba(7, 16, 20, 0.92));
+  color: #d8e8ec;
+  content: attr(data-placeholder);
+  display: grid;
+  font-size: 14px;
+  font-weight: 820;
+  inset: 0;
+  letter-spacing: 0;
+  padding: 18px;
+  place-items: center;
+  position: absolute;
+  text-align: center;
 }
 
 .sensor-board {
