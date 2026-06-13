@@ -112,6 +112,48 @@ localStorage.setItem("robobet_twitch_client_id", "TU_CLIENT_ID")
 
 Si no hay `robobet_twitch_client_id`, el boton crea una sesion demo para validar la UI sin depender de Twitch.
 
+Desde la revision actual, el frontend ya no sincroniza el perfil Twitch directamente contra `POST /api/users/twitch`. En su lugar envia el token a:
+
+```text
+POST /api/twitch/auth
+```
+
+El backend valida el token contra Twitch, lee el perfil real con Helix y solo entonces crea o actualiza el usuario RoboBet asociado.
+
+## Comandos De Chat Twitch
+
+El backend expone un endpoint para que un bot o bridge de Twitch entregue mensajes del chat ya autenticados:
+
+```text
+POST /api/twitch/chat
+GET  /api/twitch/events
+```
+
+Payload esperado:
+
+```json
+{
+  "login": "viewer_login",
+  "display_name": "Viewer",
+  "twitch_id": "123456",
+  "channel": "mi_canal",
+  "message": "!voto DFS"
+}
+```
+
+Comandos soportados:
+
+- `!estado`
+- `!voto <opcion>`
+- `!voto <poll_id> <opcion>`
+- `!apuesta <finish|time|obstacles|algorithm> <opcion> <puntos>`
+
+Si se define la variable de entorno `ROBOBET_TWITCH_CHAT_SECRET`, el bot debe enviar el header:
+
+```text
+X-RoboBet-Secret: TU_SECRETO
+```
+
 ## Historial De Laberintos
 
 La pantalla de usuario usa:

@@ -4,13 +4,13 @@ Set-Location $root
 
 $python = Join-Path $root ".venv\Scripts\python.exe"
 if (Test-Path $python) {
-  & $python .\scripts\simulate_robot.py @args
+  & $python .\scripts\twitch_chat_bridge.py @args
   exit $LASTEXITCODE
 }
 
 $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
 if ($pyLauncher) {
-  & py -3.13 .\scripts\simulate_robot.py @args
+  & py -3.13 .\scripts\twitch_chat_bridge.py @args
   exit $LASTEXITCODE
 }
 

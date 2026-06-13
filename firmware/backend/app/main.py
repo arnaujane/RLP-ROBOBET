@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import FRONTEND_DIR
 from .database import db, init_db
 from .realtime import hub
-from .routers import bets, operator, polls, run, streams, users
+from .routers import bets, operator, polls, run, streams, twitch, users
 
 app = FastAPI(title="RoboBet", version="1.0.0")
 
@@ -32,6 +32,7 @@ app.include_router(polls.router)
 app.include_router(run.router)
 app.include_router(operator.router)
 app.include_router(streams.router)
+app.include_router(twitch.router)
 
 
 @app.websocket("/ws/ui")

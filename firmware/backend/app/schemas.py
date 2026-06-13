@@ -14,6 +14,19 @@ class TwitchUserCreate(BaseModel):
     profile_image_url: Optional[str] = None
 
 
+class TwitchAuthRequest(BaseModel):
+    access_token: str = Field(min_length=1)
+
+
+class TwitchChatMessage(BaseModel):
+    login: str = Field(min_length=1, max_length=64)
+    display_name: Optional[str] = Field(default=None, max_length=64)
+    twitch_id: Optional[str] = None
+    profile_image_url: Optional[str] = None
+    channel: Optional[str] = Field(default=None, max_length=64)
+    message: str = Field(min_length=1, max_length=500)
+
+
 class BetCreate(BaseModel):
     user_id: int
     kind: str

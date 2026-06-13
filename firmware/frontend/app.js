@@ -1410,30 +1410,28 @@ async function handleTwitchLogin() {
 async function loadTwitchProfile() {
   parseTwitchHash();
   const token = localStorage.getItem("robobet_twitch_token");
-  const clientId = localStorage.getItem("robobet_twitch_client_id");
-  if (!token || !clientId) {
+  if (!token) {
     renderTwitch();
     renderTwitchChat();
     return;
   }
 
   try {
-    const response = await fetch("https://api.twitch.tv/helix/users", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Client-Id": clientId,
-      },
+    const payload = await api("/api/twitch/auth", {
+      method: "POST",
+      body: JSON.stringify({
+        access_token: token,
+      }),
     });
-    if (!response.ok) throw new Error(response.statusText);
-    const payload = await response.json();
-    state.twitch = payload.data?.[0] || null;
+    state.twitch = payload.twitch_user || null;
+    state.user = payload.user || state.user;
     localStorage.setItem("robobet_twitch_user", JSON.stringify(state.twitch));
+    if (state.user) localStorage.setItem("robobet_user", JSON.stringify(state.user));
   } catch (error) {
     log("Twitch OAuth pendiente", { error: error.message });
   }
   renderTwitch();
   renderTwitchChat();
-  await safeLoad("Usuario Twitch", syncTwitchUser);
 }
 
 async function syncTwitchUser() {

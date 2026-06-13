@@ -1,0 +1,10 @@
+.venv/
+firmware/.venv/
+firmware/data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

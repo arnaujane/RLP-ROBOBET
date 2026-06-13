@@ -97,6 +97,8 @@ scripts/
   run_backend.ps1        Arranque local del backend
   simulate_robot.py      Simulador WebSocket del robot
   simulate_robot.ps1     Wrapper PowerShell del simulador
+  twitch_chat_bridge.py  Puente Twitch EventSub -> backend
+  run_twitch_bridge.ps1  Wrapper PowerShell del puente Twitch
 
 docs/
   guia_usuario.md
@@ -139,6 +141,39 @@ Si una señal roja bloquea una salida, el robot:
 3. Vuelve al nodo anterior.
 4. Busca otra salida pendiente.
 5. Si hace falta, navega por aristas conocidas hasta otro nodo con opciones.
+
+### Máquina De Estados Del Robot
+
+El firmware no funciona como una secuencia lineal, sino como una máquina de estados. Cada iteración del `loop` lee sensores, revisa eventos pendientes y ejecuta la lógica correspondiente al estado actual. Esto permite mezclar control fí­sico, decisión de ruta y tratamiento de obstáculos sin bloquear el robot.
+
+Estados principales:
+
+- `WAITING_START`: robot armado pero parado, esperando orden de inicio.
+- `FOLLOWING_LINE`: seguimiento normal de la lí­nea con el array QTR.
+- `INTERSECTION_DETECTED`: se detecta una rama, T, cruce o zona negra amplia.
+- `CENTER_ON_NODE`: el robot avanza un poco para quedar centrado sobre el nodo.
+- `CLASSIFY_NODE`: lee qué salidas existen realmente en el cruce.
+- `CHOOSE_DIRECTION`: consulta DFS o BFS para decidir la siguiente acción.
+- `GO_STRAIGHT`, `TURN_LEFT`, `TURN_RIGHT`, `TURN_BACK`: ejecuta el movimiento elegido.
+- `SEARCH_LINE`: reacopla el robot con la lí­nea tras un giro.
+- `OBSTACLE_CHECK`: confirma si delante hay un obstáculo y qué señal se ha visto.
+- `WAITING_OBSTACLE_DECISION`: pausa opcional para esperar decisión manual o de cámara.
+- `BACKTRACKING`, `RETURNING_FROM_BLOCKED_OBSTACLE`, `RETURNING_TO_UNFINISHED_NODE`: modos de regreso cuando una salida queda bloqueada o cuando toca volver a un nodo pendiente.
+- `FINISH_CHECK`, `FINISH_DETECTED`, `FINISHED`: validación y cierre de una carrera completada.
+- `ERROR_STATE`: estado de seguridad cuando algo inconsistente impide continuar.
+
+Transiciones importantes:
+
+- De `WAITING_START` pasa a `FOLLOWING_LINE` cuando se autoriza movimiento.
+- De `FOLLOWING_LINE` pasa a `INTERSECTION_DETECTED` cuando los QTR ven un nodo o una condición especial.
+- De `INTERSECTION_DETECTED` pasa a `CENTER_ON_NODE` y luego a `CLASSIFY_NODE` para decidir con el robot bien colocado.
+- De `CLASSIFY_NODE` pasa a `CHOOSE_DIRECTION`, donde el grafo y el algoritmo activo determinan si toca explorar, volver o cerrar un camino.
+- Tras `GO_STRAIGHT` o cualquier giro, entra en `SEARCH_LINE` o vuelve directamente a `FOLLOWING_LINE` cuando recupera la referencia sobre el suelo.
+- Si aparece un obstáculo, entra en `OBSTACLE_CHECK` y, si hace falta, en `WAITING_OBSTACLE_DECISION` antes de seguir, retroceder o marcar la arista.
+- Cuando una salida queda descartada, el robot entra en estados de retorno para volver al último nodo útil sin perder el mapa ya construido.
+- Si detecta la señal negra de final, pasa por `FINISH_DETECTED` y termina en `FINISHED`.
+
+La web refleja esta máquina de estados casi tal cual. Por eso en el dashboard aparecen nombres como `FOLLOWING_LINE`, `WAITING_OBSTACLE_DECISION` o `RETURNING_TO_UNFINISHED_NODE`: no son etiquetas decorativas, sino el estado real del firmware en ese instante.
 
 ### Movimiento Sin Encoders
 
@@ -186,8 +221,6 @@ fastapi
 uvicorn
 pydantic
 python-multipart
-opencv-python
-numpy
 websockets
 ```
 
@@ -198,9 +231,7 @@ Las versiones exactas están en `requirements.txt`.
 Ejecutar desde esta carpeta:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+.\scripts\setup_backend.ps1
 ```
 
 Arrancar la web:
@@ -208,6 +239,8 @@ Arrancar la web:
 ```powershell
 .\scripts\run_backend.ps1
 ```
+
+Nota: si el sistema tiene Python 3.14 como predeterminado, usar `.\scripts\setup_backend.ps1`; este proyecto queda estable con Python 3.13.
 
 Abrir:
 
@@ -234,6 +267,33 @@ Escenario con obstáculo rojo y backtracking:
 ```
 
 Después, pulsar `Iniciar` desde la web.
+
+## Twitch Chat Bridge
+
+El backend ya sabe procesar `!estado`, `!voto` y `!apuesta`, pero necesita un proceso externo que lea el chat real de Twitch y reenvíe los mensajes a `POST /api/twitch/chat`.
+
+Variables mínimas:
+
+```powershell
+$env:ROBOBET_TWITCH_ACCESS_TOKEN="TU_USER_ACCESS_TOKEN"
+$env:ROBOBET_TWITCH_BROADCASTER_LOGIN="tu_canal"
+```
+
+Opcionales:
+
+```powershell
+$env:ROBOBET_TWITCH_CLIENT_ID="TU_CLIENT_ID"
+$env:ROBOBET_TWITCH_BACKEND_URL="http://127.0.0.1:8000/api/twitch/chat"
+$env:ROBOBET_TWITCH_CHAT_SECRET="TU_SECRETO"
+```
+
+Arranque:
+
+```powershell
+.\scripts\run_twitch_bridge.ps1
+```
+
+El token debe incluir `user:read:chat`. El puente abre EventSub WebSocket, se suscribe a `channel.chat.message` y reenvía cada mensaje al backend.
 
 ## Flasheo
 
