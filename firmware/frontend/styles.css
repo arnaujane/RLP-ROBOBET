@@ -339,9 +339,26 @@ label {
   margin-bottom: 12px;
 }
 
+.panel-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.panel-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
+  margin-top: 3px;
+}
+
 .admin-hero,
+.admin-sensors,
 .camera-grid,
 .admin-grid,
+.broadcast-grid,
 .viewer-grid,
 .viewer-status {
   display: grid;
@@ -360,8 +377,17 @@ label {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
+.admin-sensors {
+  align-items: stretch;
+  grid-template-columns: minmax(360px, 0.78fr) minmax(560px, 1.22fr);
+}
+
 .sensor-panel {
   grid-column: span 3;
+}
+
+.admin-sensors .sensor-panel {
+  grid-column: auto;
 }
 
 .camera-detect-panel,
@@ -372,12 +398,25 @@ label {
   grid-column: span 2;
 }
 
+.graph-panel {
+  grid-column: span 4;
+}
+
+.admin-sensors .graph-panel {
+  grid-column: auto;
+}
+
 .viewer-grid {
   grid-template-columns: minmax(520px, 1.4fr) minmax(360px, 0.6fr);
 }
 
 .viewer-status {
   grid-template-columns: minmax(280px, 0.9fr) minmax(300px, 0.8fr) minmax(420px, 1.1fr) minmax(420px, 1.1fr);
+}
+
+.broadcast-grid {
+  align-items: stretch;
+  grid-template-columns: minmax(360px, 0.72fr) minmax(520px, 1.28fr);
 }
 
 .state-panel {
@@ -487,7 +526,7 @@ label {
 
 .video-box {
   align-items: center;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 4 / 3;
   background: #071014;
   border: 1px solid #101b20;
   border-radius: 6px;
@@ -499,7 +538,7 @@ label {
 }
 
 .video-box.large {
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 4 / 3;
 }
 
 .video-box img {
@@ -531,7 +570,7 @@ label {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(8, minmax(42px, 1fr));
-  min-height: 148px;
+  min-height: 128px;
   padding: 16px;
 }
 
@@ -588,6 +627,189 @@ label {
   font-size: 12px;
   margin-top: 8px;
   overflow-wrap: anywhere;
+}
+
+.graph-canvas {
+  background: #0c1519;
+  border: 1px solid #1a2a31;
+  border-radius: 8px;
+  min-height: clamp(280px, 34vh, 500px);
+  overflow: hidden;
+  position: relative;
+}
+
+.graph-canvas svg {
+  display: block;
+  height: clamp(280px, 34vh, 500px);
+  width: 100%;
+}
+
+.graph-canvas:fullscreen {
+  background: #071014;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  padding: 24px;
+}
+
+.graph-canvas:fullscreen svg {
+  height: 100%;
+  max-height: 100vh;
+}
+
+.graph-edge {
+  stroke: #7f929b;
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+.graph-edge.green {
+  stroke: #22b95c;
+}
+
+.graph-edge.blocked {
+  stroke: #ec3f3f;
+  stroke-dasharray: 8 7;
+}
+
+.graph-exit {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.graph-exit.frontier {
+  stroke: #f5a623;
+  stroke-dasharray: 5 5;
+}
+
+.graph-exit.green {
+  stroke: #22b95c;
+}
+
+.graph-exit.blocked {
+  stroke: #ec3f3f;
+  stroke-dasharray: 6 6;
+}
+
+.graph-node {
+  fill: #f6fbfd;
+  stroke: #23434e;
+  stroke-width: 3;
+}
+
+.graph-node.current {
+  fill: #0f8a7b;
+  stroke: #33d59a;
+}
+
+.graph-node.frontier {
+  stroke: #f5a623;
+}
+
+.graph-node.final {
+  fill: #111;
+  stroke: #f6fbfd;
+}
+
+.graph-label {
+  fill: #071014;
+  font-size: 12px;
+  font-weight: 850;
+  text-anchor: middle;
+}
+
+.graph-label.current,
+.graph-label.final {
+  fill: #fff;
+}
+
+.graph-exit-label {
+  font-size: 10px;
+  font-weight: 860;
+  text-anchor: middle;
+}
+
+.graph-exit-label.frontier {
+  fill: #f5a623;
+}
+
+.graph-exit-label.green {
+  fill: #22b95c;
+}
+
+.graph-exit-label.blocked {
+  fill: #ff6868;
+}
+
+.graph-edge-label {
+  paint-order: stroke;
+  stroke: #071014;
+  stroke-width: 4;
+  font-size: 10px;
+  font-weight: 900;
+  text-anchor: middle;
+}
+
+.graph-edge-label.green {
+  fill: #33d59a;
+}
+
+.graph-edge-label.blocked {
+  fill: #ff6868;
+}
+
+.graph-empty {
+  fill: #9fb1b8;
+  font-size: 15px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.graph-legend {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.graph-legend span {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 760;
+  gap: 6px;
+}
+
+.graph-legend i {
+  border-radius: 999px;
+  display: inline-block;
+  height: 8px;
+  width: 24px;
+}
+
+.graph-legend .edge-normal {
+  background: #7f929b;
+}
+
+.graph-legend .edge-frontier {
+  background: #f5a623;
+}
+
+.graph-legend .edge-green {
+  background: #22b95c;
+}
+
+.graph-legend .edge-blocked {
+  background: #ec3f3f;
+}
+
+.graph-legend .node-current {
+  background: #0f8a7b;
+  border: 2px solid #33d59a;
+  height: 10px;
+  width: 10px;
 }
 
 .sign-result {
@@ -750,6 +972,71 @@ label {
   white-space: pre-wrap;
 }
 
+.twitch-chat-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(260px, 1fr) auto;
+}
+
+.twitch-config {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 12px;
+}
+
+.twitch-chat-frame {
+  background: #0b1013;
+  border: 1px solid #1a2a31;
+  border-radius: 8px;
+  min-height: clamp(280px, 38vh, 520px);
+  overflow: hidden;
+  position: relative;
+}
+
+.twitch-chat-frame::before {
+  color: #9fb1b8;
+  content: "Configura un canal de Twitch";
+  display: grid;
+  font-size: 14px;
+  font-weight: 800;
+  inset: 0;
+  place-items: center;
+  position: absolute;
+  text-align: center;
+}
+
+.twitch-chat-frame iframe {
+  background: #0b1013;
+  border: 0;
+  display: block;
+  height: 100%;
+  min-height: inherit;
+  position: relative;
+  width: 100%;
+  z-index: 1;
+}
+
+.twitch-chat-frame iframe.empty {
+  display: none;
+}
+
+.chat-commands {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-commands span {
+  background: #edf4f6;
+  border: 1px solid #dce8ec;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 5px 9px;
+}
+
 .twitch-card {
   align-items: center;
   background: rgba(255, 255, 255, 0.08);
@@ -790,6 +1077,10 @@ label {
 
 .live-card {
   background: #ffffff;
+}
+
+.viewer-chat {
+  grid-column: span 2;
 }
 
 .inline-form {
@@ -974,7 +1265,9 @@ td {
   }
 
   .admin-hero,
+  .admin-sensors,
   .camera-grid,
+  .broadcast-grid,
   .viewer-grid {
     grid-template-columns: 1fr;
   }
@@ -987,6 +1280,8 @@ td {
   .camera-detect-panel,
   .motor-panel,
   .algorithm-panel,
+  .graph-panel,
+  .twitch-chat-panel,
   .obstacle-panel,
   .maze-panel {
     grid-column: span 3;
@@ -1038,6 +1333,8 @@ td {
   .camera-detect-panel,
   .motor-panel,
   .algorithm-panel,
+  .graph-panel,
+  .twitch-chat-panel,
   .obstacle-panel,
   .maze-panel {
     grid-column: 1 / -1;
@@ -1070,6 +1367,7 @@ td {
   .poll-actions,
   .url-row,
   .inline-form,
+  .twitch-config,
   .motor-gauges,
   .confidence-row {
     grid-template-columns: 1fr;

@@ -49,6 +49,10 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
+                twitch_id TEXT,
+                twitch_login TEXT,
+                twitch_display_name TEXT,
+                profile_image_url TEXT,
                 balance INTEGER NOT NULL DEFAULT 1000,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -113,6 +117,11 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_column(conn, "users", "twitch_id", "TEXT")
+        _ensure_column(conn, "users", "twitch_login", "TEXT")
+        _ensure_column(conn, "users", "twitch_display_name", "TEXT")
+        _ensure_column(conn, "users", "profile_image_url", "TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_twitch_login ON users(twitch_login) WHERE twitch_login IS NOT NULL")
         _ensure_column(conn, "runs", "crossing_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "runs", "restrictions", "TEXT")
         _ensure_column(conn, "runs", "telemetry_summary", "TEXT")

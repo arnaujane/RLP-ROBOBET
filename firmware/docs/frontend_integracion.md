@@ -78,10 +78,16 @@ robobet_overhead_url
 La camara frontal actual suele ser:
 
 ```text
+http://IP_ESP32_CAM:81/stream
+```
+
+La ESP32-CAM usa el puerto `81` para MJPEG continuo y deja el puerto `80` para `/status`, `/snapshot` y `/detect`. Si el stream MJPEG no es estable, se puede volver temporalmente a:
+
+```text
 http://IP_ESP32_CAM/snapshot
 ```
 
-La ESP32-CAM tambien mantiene `/stream`, pero conviene reservarlo para diagnostico corto. En la web se usa `/snapshot` con refresco automatico para no bloquear `/detect` mientras el robot decide si una mancha negra es paso, bloqueo o final.
+El frontend detecta ambos modos. En MJPEG reconecta con cache-busting; en snapshot usa refresco periodico.
 
 Para camara cenital se puede usar cualquier fuente MJPEG o IP camera compatible con `<img>`.
 

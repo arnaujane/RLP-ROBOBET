@@ -1,17 +1,31 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 const STREAM_DEFAULTS = {
-  front: "http://192.168.1.56/snapshot",
+  front: "http://192.168.1.56:81/stream",
   overhead: "http://127.0.0.1:8081/video",
 };
+const DEFAULT_TWITCH_CHANNEL = "";
 const STALE_FRONT_URLS = new Set([
   "http://192.168.4.2/stream",
   "http://esp32cam.local/stream",
   "http://192.168.1.56/stream",
+  "http://192.168.1.56/snapshot",
 ]);
 const SENSOR_COUNT = 8;
 const DEFAULT_QTR_THRESHOLD = 2500;
 const FRONT_SNAPSHOT_INTERVAL_MS = 420;
 const FRONT_SNAPSHOT_TIMEOUT_MS = 1800;
+const GRAPH_DIRECTION_BITS = [
+  { bit: 1, name: "NORTH", dx: 0, dy: -1 },
+  { bit: 2, name: "EAST", dx: 1, dy: 0 },
+  { bit: 4, name: "SOUTH", dx: 0, dy: 1 },
+  { bit: 8, name: "WEST", dx: -1, dy: 0 },
+];
+const GRAPH_REVERSE_ORIENTATION = {
+  NORTH: "SOUTH",
+  EAST: "WEST",
+  SOUTH: "NORTH",
+  WEST: "EAST",
+};
 
 const state = {
   backendOnline: false,
@@ -41,6 +55,7 @@ const state = {
   },
   streamTimers: {},
   streamFailures: {},
+  activeView: localStorage.getItem("robobet_view") || "admin",
   counters: {
     crossings: 0,
     lastNode: null,
@@ -210,10 +225,23 @@ function getRobotStateLabel(robot = state.robot) {
     IDLE: "En espera",
     WAITING_START: "En espera",
     FOLLOWING_LINE: "Resolviendo laberinto",
+    INTERSECTION_DETECTED: "Cruce detectado",
+    CENTER_ON_NODE: "Centrando cruce",
+    CLASSIFY_NODE: "Leyendo salidas",
+    CHOOSE_DIRECTION: "Decidiendo giro",
+    GO_STRAIGHT: "Siguiendo recto",
+    TURN_LEFT: "Girando izquierda",
+    TURN_RIGHT: "Girando derecha",
+    TURN_BACK: "Media vuelta",
+    WAITING_TURN_CONFIRMATION: "Esperando giro",
+    SEARCH_LINE: "Buscando linea",
     NODE_DETECTED: "Cruce detectado",
     SELECTING_EDGE: "Seleccionando ruta",
     OBSTACLE_CHECK: "Obstaculo detectado",
+    WAITING_OBSTACLE_DECISION: "Esperando obstaculo",
     BACKTRACKING: "Retrocediendo",
+    RETURNING_FROM_BLOCKED_OBSTACLE: "Volviendo al cruce",
+    RETURNING_TO_UNFINISHED_NODE: "Volviendo a nodo pendiente",
     FINISH_CHECK: "Final detectado",
     FINISHED: "Finalizado",
     ERROR: "Error",
@@ -225,11 +253,19 @@ function getRobotStateLabel(robot = state.robot) {
 function getAlgorithmPhase(robot = state.robot) {
   const current = String(robot.state || "");
   const event = String(robot.last_event || "");
+  if (current.includes("WAITING_OBSTACLE_DECISION")) return "Esperando obstaculo";
+  if (current.includes("RETURNING_FROM_BLOCKED_OBSTACLE")) return "Volviendo al cruce";
+  if (current.includes("RETURNING_TO_UNFINISHED_NODE")) return "Volviendo a nodo pendiente";
   if (current.includes("BACKTRACK") || event.includes("BACKTRACK")) return "Retrocediendo";
-  if (current.includes("SELECTING") || event.includes("EDGE")) return "Recalculando ruta";
+  if (current.includes("WAITING_TURN_CONFIRMATION")) return "Esperando confirmacion";
+  if (current.includes("TURN_LEFT")) return "Girando izquierda";
+  if (current.includes("TURN_RIGHT")) return "Girando derecha";
+  if (current.includes("TURN_BACK")) return "Media vuelta";
+  if (current.includes("GO_STRAIGHT")) return "Recto";
+  if (current.includes("SELECTING") || current.includes("CHOOSE") || event.includes("EDGE")) return "Recalculando ruta";
   if (current.includes("FINISH") || event.includes("FINISH")) return "Finalizado";
   if (current.includes("OBSTACLE") || event.includes("OBSTACLE")) return "Obstaculo";
-  if (current.includes("FOLLOWING") || current.includes("NODE")) return "Explorando";
+  if (current.includes("FOLLOWING") || current.includes("NODE") || current.includes("INTERSECTION") || current.includes("CENTER")) return "Explorando";
   return "En espera";
 }
 
@@ -293,7 +329,27 @@ function getMotorPower(robot = state.robot) {
     return [clamp(Number(rawLeft) || 0, 0, 100), clamp(Number(rawRight) || 0, 0, 100)];
   }
 
-  const running = ["FOLLOWING_LINE", "NODE_DETECTED", "SELECTING_EDGE", "OBSTACLE_CHECK", "BACKTRACKING"].includes(String(robot.state));
+  const runningStates = [
+    "FOLLOWING_LINE",
+    "INTERSECTION_DETECTED",
+    "CENTER_ON_NODE",
+    "CLASSIFY_NODE",
+    "CHOOSE_DIRECTION",
+    "GO_STRAIGHT",
+    "TURN_LEFT",
+    "TURN_RIGHT",
+    "TURN_BACK",
+    "SEARCH_LINE",
+    "NODE_DETECTED",
+    "SELECTING_EDGE",
+    "OBSTACLE_CHECK",
+    "WAITING_OBSTACLE_DECISION",
+    "BACKTRACKING",
+    "RETURNING_FROM_BLOCKED_OBSTACLE",
+    "RETURNING_TO_UNFINISHED_NODE",
+    "RETURN_TO_LAST_NODE",
+  ];
+  const running = runningStates.includes(String(robot.state));
   if (!running && state.backendOnline && robot.connected) return [0, 0];
 
   const speedLimit = Number(robot.speed_limit ?? 100);
@@ -312,6 +368,7 @@ function renderSensorBoard() {
   const values = parseSensorValues();
   const active = values.map((value) => value >= threshold);
   const activeCount = active.filter(Boolean).length;
+  const lineTrackingProtected = Boolean(state.robot.line_tracking_protected ?? state.robot.lineTrackingProtected);
 
   $("sensorBoard").innerHTML = values
     .map((value, index) => `
@@ -323,7 +380,7 @@ function renderSensorBoard() {
     `)
     .join("");
 
-  setText("sensorSummary", `${activeCount}/8 activos`);
+  setText("sensorSummary", `${activeCount}/8 activos${lineTrackingProtected ? " - PID protegido" : ""}`);
   setText("sensorThreshold", threshold);
   setText("qtrValues", values.map((value) => Math.round(value)).join(", "));
 }
@@ -344,6 +401,169 @@ function renderMotorPower() {
   const badge = $("speedLimitBadge");
   badge.textContent = speedLimit <= 80 ? "Restriccion 80%" : `${speedLimit}%`;
   badge.classList.toggle("limited", speedLimit <= 80);
+}
+
+function renderMazeGraph() {
+  const svg = $("mazeGraph");
+  if (!svg) return;
+
+  const nodes = Array.isArray(state.robot.graph_nodes) ? state.robot.graph_nodes : [];
+  const edges = Array.isArray(state.robot.graph_edges) ? state.robot.graph_edges : [];
+  const currentNode = Number(state.robot.current_node ?? -1);
+  const targetNode = Number(state.robot.navigation_target_node ?? -1);
+
+  setText("graphSummary", `${nodes.length} nodos / ${edges.length} aristas`);
+
+  if (!nodes.length) {
+    svg.setAttribute("viewBox", "0 0 720 420");
+    svg.innerHTML = `<text class="graph-empty" x="360" y="215">Sin grafo todavia</text>`;
+    return;
+  }
+
+  const width = 720;
+  const height = 420;
+  const padding = 76;
+  const nodeMap = new Map(nodes.map((node) => [Number(node.id), node]));
+  const xs = nodes.map((node) => Number(node.x) || 0);
+  const ys = nodes.map((node) => Number(node.y) || 0);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
+
+  const pointFor = (node) => ({
+    x: padding + ((Number(node.x) || 0) - minX) * scale,
+    y: height - padding - ((Number(node.y) || 0) - minY) * scale,
+  });
+
+  const connectedOrientations = new Map();
+  const markConnected = (nodeId, orientation) => {
+    if (!connectedOrientations.has(nodeId)) connectedOrientations.set(nodeId, new Set());
+    connectedOrientations.get(nodeId).add(orientation);
+  };
+
+  edges.forEach((edge) => {
+    const from = nodeMap.get(Number(edge.from));
+    const to = nodeMap.get(Number(edge.to));
+    if (!from || !to) return;
+    const fromPoint = pointFor(from);
+    const toPoint = pointFor(to);
+    const dx = toPoint.x - fromPoint.x;
+    const dy = toPoint.y - fromPoint.y;
+    const fallbackFromOrientation = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "EAST" : "WEST") : (dy >= 0 ? "SOUTH" : "NORTH");
+    const fromOrientation = GRAPH_REVERSE_ORIENTATION[edge.orientation] ? edge.orientation : fallbackFromOrientation;
+    const toOrientation = GRAPH_REVERSE_ORIENTATION[fromOrientation] || (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "WEST" : "EAST") : (dy >= 0 ? "NORTH" : "SOUTH"));
+    markConnected(Number(edge.from), fromOrientation);
+    markConnected(Number(edge.to), toOrientation);
+  });
+
+  const edgeMarkup = edges
+    .map((edge) => {
+      const from = nodeMap.get(Number(edge.from));
+      const to = nodeMap.get(Number(edge.to));
+      if (!from || !to) return "";
+      const a = pointFor(from);
+      const b = pointFor(to);
+      const classes = ["graph-edge"];
+      if (edge.blocked) classes.push("blocked");
+      else if (edge.green) classes.push("green");
+      const label = edge.blocked ? "RED" : edge.green ? "GREEN" : "";
+      const labelMarkup = label
+        ? `<text class="graph-edge-label ${edge.blocked ? "blocked" : "green"}" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 8}">${label}</text>`
+        : "";
+      return `<line class="${classes.join(" ")}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"><title>${edge.from} -> ${edge.to} ${edge.orientation || ""} ${label}</title></line>${labelMarkup}`;
+    })
+    .join("");
+
+  const exitMarkup = nodes
+    .map((node) => {
+      const point = pointFor(node);
+      const id = Number(node.id);
+      const options = Number(node.options) || 0;
+      const tried = Number(node.tried) || 0;
+      const blocked = Number(node.blocked) || 0;
+      const green = Number(node.green) || 0;
+      const connected = connectedOrientations.get(id) || new Set();
+
+      return GRAPH_DIRECTION_BITS.map((direction) => {
+        if (!(options & direction.bit) || connected.has(direction.name)) return "";
+
+        const isBlocked = Boolean(blocked & direction.bit);
+        const isGreen = Boolean(green & direction.bit);
+        const isUntried = !isBlocked && !isGreen && !(tried & direction.bit);
+        const stubLength = isUntried ? 58 : 46;
+        const end = {
+          x: point.x + direction.dx * stubLength,
+          y: point.y + direction.dy * stubLength,
+        };
+        const marker = `url(#${isBlocked ? "arrowBlocked" : isGreen ? "arrowGreen" : "arrowFrontier"})`;
+        const classes = ["graph-exit"];
+        if (isBlocked) classes.push("blocked");
+        else if (isGreen) classes.push("green");
+        else classes.push("frontier");
+
+        const label = isBlocked ? "RED" : isGreen ? "GREEN" : "nuevo";
+        const labelX = point.x + direction.dx * (stubLength + 14);
+        const labelY = point.y + direction.dy * (stubLength + 14) + 4;
+
+        return `
+          <line class="${classes.join(" ")}" x1="${point.x}" y1="${point.y}" x2="${end.x}" y2="${end.y}" marker-end="${marker}">
+            <title>Nodo ${id} salida ${direction.name}: ${label}</title>
+          </line>
+          <text class="graph-exit-label ${isBlocked ? "blocked" : isGreen ? "green" : "frontier"}" x="${labelX}" y="${labelY}">${label}</text>
+        `;
+      }).join("");
+    })
+    .join("");
+
+  const nodeMarkup = nodes
+    .map((node) => {
+      const point = pointFor(node);
+      const id = Number(node.id);
+      const options = Number(node.options) || 0;
+      const tried = Number(node.tried) || 0;
+      const blocked = Number(node.blocked) || 0;
+      const frontier = (options & ~tried & ~blocked) !== 0;
+      const classes = ["graph-node"];
+      const labelClasses = ["graph-label"];
+      if (id === currentNode) {
+        classes.push("current");
+        labelClasses.push("current");
+      } else if (node.final) {
+        classes.push("final");
+        labelClasses.push("final");
+      } else if (frontier || id === targetNode) {
+        classes.push("frontier");
+      }
+
+      return `
+        <circle class="${classes.join(" ")}" cx="${point.x}" cy="${point.y}" r="14">
+          <title>Nodo ${id} opciones=${options} tried=${tried} blocked=${blocked}</title>
+        </circle>
+        <text class="${labelClasses.join(" ")}" x="${point.x}" y="${point.y + 4}">${id}</text>
+      `;
+    })
+    .join("");
+
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  const defs = `
+    <defs>
+      <marker id="arrowFrontier" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="#f5a623"></path>
+      </marker>
+      <marker id="arrowBlocked" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="#ec3f3f"></path>
+      </marker>
+      <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="#22b95c"></path>
+      </marker>
+    </defs>
+  `;
+  svg.innerHTML = `${defs}${edgeMarkup}${exitMarkup}${nodeMarkup}`;
 }
 
 function renderCamera() {
@@ -372,6 +592,22 @@ function renderRobotStatus() {
   const elapsed = getRobotElapsedMs();
   const speedLimit = Number(robot.speed_limit ?? 100);
   const restrictions = speedLimit <= 80 ? "Motor 80%" : "Sin restricciones";
+  const nodeCount = Number(robot.node_count ?? robot.nodeCount ?? 0);
+  const edgeCount = Number(robot.edge_count ?? robot.edgeCount ?? 0);
+  const crossingCount = Number(robot.crossing_count ?? robot.crossingCount ?? state.counters.crossings ?? 0);
+  const orientation = robot.orientation || "-";
+  const exits = robot.relative_exits || robot.relativeExits || "-";
+  const navigationTarget = robot.navigation_target_node ?? robot.navigationTargetNode;
+  const navigationNext = robot.navigation_next_node ?? robot.navigationNextNode;
+  const navigatingToFrontier = Boolean(robot.navigating_to_frontier ?? robot.navigatingToFrontier);
+  const waitingTurn = Boolean(robot.waiting_for_turn_confirmation ?? robot.waitingForTurnConfirmation);
+  const pauseEnabled = Boolean(robot.pause_before_turn_enabled ?? robot.pauseBeforeTurnEnabled);
+  const pendingTurn = robot.pending_turn || robot.pendingTurn || "-";
+  const obstacleHandlingEnabled = Boolean(robot.obstacle_handling_enabled ?? robot.obstacleHandlingEnabled);
+  const waitingObstacle = Boolean(robot.waiting_for_obstacle_decision ?? robot.waitingForObstacleDecision);
+  const waitingObstacleMode = Boolean(robot.wait_for_obstacle_decision_enabled ?? robot.waitForObstacleDecisionEnabled);
+  const manualObstacleEnabled = Boolean(robot.manual_obstacle_sign_enabled ?? robot.manualObstacleSignEnabled);
+  const manualObstacleSign = robot.manual_obstacle_sign || robot.manualObstacleSign || "NO_SIGN";
   const statePill = $("adminStatePill");
   const stateText = String(robot.state || "offline");
 
@@ -382,7 +618,12 @@ function renderRobotStatus() {
 
   statePill.textContent = label;
   setText("adminStateText", stateText);
-  setText("adminAlertText", robot.connected ? robot.last_event || "Sin alertas activas" : "Robot desconectado");
+  const activeAlert = waitingObstacle
+    ? "Obstaculo pendiente: pulsa verde, rojo o negro"
+    : waitingTurn
+      ? `Giro pendiente: ${pendingTurn}`
+      : robot.last_event || "Sin alertas activas";
+  setText("adminAlertText", robot.connected ? activeAlert : "Robot desconectado");
   setText("currentTimer", formatTime(elapsed));
   setText("mazeTimer", formatTime(elapsed));
   setText("liveTime", formatTime(elapsed));
@@ -392,22 +633,36 @@ function renderRobotStatus() {
   setText("activeMode", phase);
   setText("algorithmName", robot.algorithm || "DFS");
   setText("algorithmPhase", phase);
-  setText("activeNode", robot.current_node ?? "-");
+  setText("activeNode", robot.current_node !== null && robot.current_node !== undefined ? `${robot.current_node}/${nodeCount}` : "-");
   setText("mazeState", label);
   setText("liveRobotState", label);
-  setText("mazeRouteState", phase);
+  const navigationText = navigatingToFrontier ? ` / objetivo ${navigationTarget} via ${navigationNext}` : "";
+  setText("mazeRouteState", `Nodos ${nodeCount} / Aristas ${edgeCount} / ${orientation} / ${exits}${navigationText}`);
   setText("mazeObstacles", robot.obstacle_count ?? 0);
   setText("liveObstacles", robot.obstacle_count ?? 0);
   setText("obstacleCount", robot.obstacle_count ?? 0);
   setText("liveRestrictions", restrictions);
-  setText("mazeCrossings", Math.max(state.counters.crossings, state.simulation.crossings));
+  setText("mazeCrossings", Math.max(crossingCount, nodeCount, state.simulation.crossings));
 
   const progress = phase === "Finalizado" ? 100 : phase === "Retrocediendo" ? 66 : phase === "Explorando" ? 42 : 18;
   $("algorithmProgress").style.width = `${progress}%`;
 
-  const obstacleActive = phase === "Obstaculo" || Number(robot.obstacle_count) > 0;
-  setText("obstacleStatus", obstacleActive ? "Obstaculo detectado" : "Sin obstaculos activos");
-  setText("obstacleType", obstacleActive ? "Fisico o virtual segun evento" : "Preparado para deteccion");
+  const obstacleActive = waitingObstacle || phase === "Obstaculo" || Number(robot.obstacle_count) > 0;
+  setText("obstacleStatus", obstacleHandlingEnabled ? (waitingObstacle ? "Esperando decision" : obstacleActive ? "Obstaculo detectado" : "Obstaculos activos") : "Obstaculos desactivados");
+  setText("obstacleType", waitingObstacle ? "Botones manuales" : manualObstacleEnabled ? `Preparado ${manualObstacleSign}` : waitingObstacleMode ? "Parar y preguntar" : "Camara automatica");
+
+  const continueButton = $("continueTurn");
+  const enableButton = $("enableTurnPause");
+  const disableButton = $("disableTurnPause");
+  const enableObstaclesButton = $("enableObstacles");
+  const disableObstaclesButton = $("disableObstacles");
+  const obstacleCameraAutoButton = $("obstacleCameraAuto");
+  if (continueButton) continueButton.disabled = !waitingTurn;
+  if (enableButton) enableButton.disabled = pauseEnabled;
+  if (disableButton) disableButton.disabled = !pauseEnabled;
+  if (enableObstaclesButton) enableObstaclesButton.disabled = obstacleHandlingEnabled;
+  if (disableObstaclesButton) disableObstaclesButton.disabled = !obstacleHandlingEnabled;
+  if (obstacleCameraAutoButton) obstacleCameraAutoButton.disabled = obstacleHandlingEnabled && !waitingObstacleMode && !waitingObstacle;
 }
 
 function renderDashboard() {
@@ -415,6 +670,7 @@ function renderDashboard() {
   renderRobotStatus();
   renderSensorBoard();
   renderMotorPower();
+  renderMazeGraph();
   renderCamera();
 }
 
@@ -429,10 +685,13 @@ function formatCameraFps(value) {
 
 function cameraQualityLabel(camera = state.camera) {
   if (!camera.online) return "Sin conexion";
+  if (camera.camera_health && camera.camera_health !== "ok") return "Degradada";
   const failures = Number(camera.consecutive_failures ?? camera.consecutiveFailures ?? 0);
   const corrupt = Number(camera.corrupt_frames ?? camera.corruptFrames ?? 0);
   const fps = Number(camera.fps ?? 0);
+  const rssi = Number(camera.rssi ?? 0);
   if (failures >= 2) return "Reconectando";
+  if (rssi && rssi < -75) return "WiFi debil";
   if (corrupt > 0 || (fps > 0 && fps < 2)) return "Degradada";
   return "Estable";
 }
@@ -784,6 +1043,60 @@ async function calibrateQtr() {
   setOperatorMessage("Calibracion solicitada");
 }
 
+async function setTurnPause(enabled) {
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "SET_TURN_PAUSE", payload: { enabled } }),
+  });
+  setOperatorMessage(enabled ? "Pausa en cruces activada" : "Pausa en cruces desactivada");
+  await refreshState();
+}
+
+async function continueTurn() {
+  await api("/api/operator/command", { method: "POST", body: JSON.stringify({ type: "CONTINUE_TURN" }) });
+  setOperatorMessage("Continuar giro enviado");
+  await refreshState();
+}
+
+async function setObstacleHandling(enabled) {
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "SET_OBSTACLE_HANDLING", payload: { enabled } }),
+  });
+  setOperatorMessage(enabled ? "Obstaculos activados" : "Obstaculos desactivados");
+  await refreshState();
+}
+
+async function setObstacleDecisionWait(enabled) {
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "SET_OBSTACLE_DECISION_WAIT", payload: { enabled } }),
+  });
+}
+
+async function sendObstacleDecision(sign) {
+  await setObstacleDecisionWait(true);
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "RESOLVE_OBSTACLE", payload: { sign } }),
+  });
+  setOperatorMessage(`Decision obstaculo: ${sign}`);
+  await refreshState();
+}
+
+async function setObstacleCameraAuto() {
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "SET_OBSTACLE_HANDLING", payload: { enabled: true } }),
+  });
+  await api("/api/operator/command", {
+    method: "POST",
+    body: JSON.stringify({ type: "RESOLVE_OBSTACLE", payload: { sign: "CAMERA_AUTO" } }),
+  });
+  setOperatorMessage("Obstaculos por camara automatica");
+  await refreshState();
+}
+
 function setOperatorMessage(text) {
   setText("operatorMessage", text);
   if (text) setTimeout(() => setText("operatorMessage", ""), 3500);
@@ -814,7 +1127,28 @@ function getStoredStreamUrl(storageKey, defaultUrl, staleUrls = new Set()) {
 function normalizeFrontCameraUrl(rawUrl) {
   const value = (rawUrl || STREAM_DEFAULTS.front).trim();
   if (!value) return STREAM_DEFAULTS.front;
-  return value.replace(/\/stream([?#].*)?$/i, "/snapshot");
+  return value;
+}
+
+function frontStreamMode(url) {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith("/stream") ? "mjpeg" : "snapshot";
+  } catch {
+    return "snapshot";
+  }
+}
+
+function cameraControlUrl(url, path = "/snapshot") {
+  try {
+    const parsed = new URL(url);
+    if (parsed.port === "81") parsed.port = "";
+    parsed.pathname = path;
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return STREAM_DEFAULTS.front.replace(/:81\/stream$/i, path);
+  }
 }
 
 function withCacheBust(url) {
@@ -853,8 +1187,25 @@ function stopStreamTimer(key) {
   }
 }
 
+function clearFrontImages() {
+  ["frontStream", "userFrontStream"].forEach((imageId) => {
+    const image = $(imageId);
+    if (!image) return;
+    image.onload = null;
+    image.onerror = null;
+    image.removeAttribute("src");
+  });
+}
+
+function activeFrontTarget() {
+  return state.activeView === "user"
+    ? { imageId: "userFrontStream", statusId: "userFrontStatus", idleImageId: "frontStream", idleStatusId: "frontStatus" }
+    : { imageId: "frontStream", statusId: "frontStatus", idleImageId: "userFrontStream", idleStatusId: "userFrontStatus" };
+}
+
 function startFrontSnapshotLoop(url) {
   stopStreamTimer("front");
+  clearFrontImages();
 
   const loadFrame = () => {
     const requestUrl = withCacheBust(url);
@@ -908,21 +1259,61 @@ function startFrontSnapshotLoop(url) {
   loadFrame();
 }
 
+function restartFrontMjpeg(url, delayMs) {
+  stopStreamTimer("front");
+  state.streamTimers.front = setTimeout(() => startFrontMjpegStream(url), delayMs);
+}
+
+function startFrontMjpegStream(url) {
+  stopStreamTimer("front");
+  clearFrontImages();
+
+  const target = activeFrontTarget();
+  const activeImage = $(target.imageId);
+  if (!activeImage) return;
+
+  state.streamFailures.front = state.streamFailures.front || 0;
+  setVideoState(target.imageId, target.statusId, "Conectando", "loading");
+  setVideoState(target.idleImageId, target.idleStatusId, "Vista en espera", "loading");
+
+  activeImage.onload = () => {
+    state.streamFailures.front = 0;
+    setVideoState(target.imageId, target.statusId, "Activo", "online");
+  };
+  activeImage.onerror = () => {
+    state.streamFailures.front = (state.streamFailures.front || 0) + 1;
+    if (state.streamFailures.front > 4) {
+      setVideoState(target.imageId, target.statusId, "Fallback snapshot", "warning");
+      startFrontSnapshotLoop(cameraControlUrl(url, "/snapshot"));
+      return;
+    }
+    setVideoState(target.imageId, target.statusId, "Reconectando", "warning");
+    restartFrontMjpeg(url, Math.min(2600, 450 + state.streamFailures.front * 350));
+  };
+  activeImage.src = withCacheBust(url);
+}
+
+function startFrontStream(url) {
+  if (frontStreamMode(url) === "mjpeg") {
+    startFrontMjpegStream(url);
+    return;
+  }
+  startFrontSnapshotLoop(url);
+}
+
 function applyStreams() {
   const front = normalizeFrontCameraUrl(getStoredStreamUrl("robobet_front_url", STREAM_DEFAULTS.front, STALE_FRONT_URLS));
   const overhead = getStoredStreamUrl("robobet_overhead_url", STREAM_DEFAULTS.overhead);
   localStorage.setItem("robobet_front_url", front);
   $("frontUrl").value = front;
   $("overheadUrl").value = overhead;
-  startFrontSnapshotLoop(front);
+  startFrontStream(front);
   setImageSource("overheadStream", "overheadStatus", overhead);
   setImageSource("userOverheadStream", "userOverheadStatus", overhead);
 }
 
 function configureStreamFeedback() {
   [
-    ["frontStream", "frontStatus"],
-    ["userFrontStream", "userFrontStatus"],
     ["overheadStream", "overheadStatus"],
     ["userOverheadStream", "userOverheadStatus"],
   ].forEach(([imageId, statusId]) => {
@@ -975,7 +1366,12 @@ function switchView(view) {
   });
   $("adminScreen").classList.toggle("active", view === "admin");
   $("userScreen").classList.toggle("active", view === "user");
+  state.activeView = view;
   localStorage.setItem("robobet_view", view);
+  const front = normalizeFrontCameraUrl(localStorage.getItem("robobet_front_url") || STREAM_DEFAULTS.front);
+  if (frontStreamMode(front) === "mjpeg") {
+    startFrontMjpegStream(front);
+  }
 }
 
 function parseTwitchHash() {
@@ -1002,11 +1398,13 @@ async function handleTwitchLogin() {
 
   state.twitch = {
     display_name: "twitch_demo",
+    login: "twitch_demo",
     profile_image_url: "",
     mode: "demo",
   };
   localStorage.setItem("robobet_twitch_user", JSON.stringify(state.twitch));
   renderTwitch();
+  await safeLoad("Usuario Twitch demo", syncTwitchUser);
 }
 
 async function loadTwitchProfile() {
@@ -1015,6 +1413,7 @@ async function loadTwitchProfile() {
   const clientId = localStorage.getItem("robobet_twitch_client_id");
   if (!token || !clientId) {
     renderTwitch();
+    renderTwitchChat();
     return;
   }
 
@@ -1033,6 +1432,25 @@ async function loadTwitchProfile() {
     log("Twitch OAuth pendiente", { error: error.message });
   }
   renderTwitch();
+  renderTwitchChat();
+  await safeLoad("Usuario Twitch", syncTwitchUser);
+}
+
+async function syncTwitchUser() {
+  if (!state.twitch) return;
+  const login = state.twitch.login || state.twitch.display_name || "twitch_demo";
+  const displayName = state.twitch.display_name || login;
+  state.user = await api("/api/users/twitch", {
+    method: "POST",
+    body: JSON.stringify({
+      twitch_id: state.twitch.id || null,
+      login,
+      display_name: displayName,
+      profile_image_url: state.twitch.profile_image_url || "",
+    }),
+  });
+  localStorage.setItem("robobet_user", JSON.stringify(state.user));
+  await Promise.all([loadUsers(), loadUserDetail()]);
 }
 
 function renderTwitch() {
@@ -1046,6 +1464,7 @@ function renderTwitch() {
     setText("twitchMeta", "OAuth preparado");
     login.classList.remove("hidden");
     logout.classList.add("hidden");
+    renderTwitchChat();
     return;
   }
 
@@ -1059,6 +1478,10 @@ function renderTwitch() {
   setText("twitchMeta", state.twitch.mode === "demo" ? "Sesion demo" : "Sesion Twitch");
   login.classList.add("hidden");
   logout.classList.remove("hidden");
+  if (!localStorage.getItem("robobet_twitch_channel")) {
+    localStorage.setItem("robobet_twitch_channel", state.twitch.login || name);
+  }
+  renderTwitchChat();
 }
 
 function logoutTwitch() {
@@ -1066,6 +1489,53 @@ function logoutTwitch() {
   localStorage.removeItem("robobet_twitch_user");
   localStorage.removeItem("robobet_twitch_token");
   renderTwitch();
+}
+
+function getTwitchChannel() {
+  return (localStorage.getItem("robobet_twitch_channel") || DEFAULT_TWITCH_CHANNEL || "").trim().replace(/^@/, "");
+}
+
+function twitchParents() {
+  const parents = new Set();
+  const host = location.hostname || "localhost";
+  parents.add(host);
+  if (host === "127.0.0.1") parents.add("localhost");
+  if (host === "localhost") parents.add("127.0.0.1");
+  return [...parents].filter(Boolean);
+}
+
+function twitchChatUrl(channel) {
+  const params = new URLSearchParams();
+  twitchParents().forEach((parent) => params.append("parent", parent));
+  return `https://www.twitch.tv/embed/${encodeURIComponent(channel)}/chat?${params.toString()}&darkpopout`;
+}
+
+function renderTwitchChat() {
+  const channel = getTwitchChannel();
+  const status = channel ? `#${channel}` : "Sin canal";
+  setText("twitchChatStatus", status);
+  setText("userTwitchChatStatus", status);
+  const input = $("twitchChannel");
+  if (input && input.value !== channel) input.value = channel;
+
+  ["adminTwitchChat", "userTwitchChat"].forEach((id) => {
+    const frame = $(id);
+    if (!frame) return;
+    if (!channel) {
+      frame.removeAttribute("src");
+      frame.classList.add("empty");
+      return;
+    }
+    const src = twitchChatUrl(channel);
+    if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
+    frame.classList.remove("empty");
+  });
+}
+
+function applyTwitchChannel() {
+  const channel = $("twitchChannel").value.trim().replace(/^@/, "");
+  localStorage.setItem("robobet_twitch_channel", channel);
+  renderTwitchChat();
 }
 
 function tickSimulation() {
@@ -1116,6 +1586,15 @@ function bindEvents() {
   $("stopRun").addEventListener("click", () => safeLoad("Parar carrera", stopRun));
   $("resetRun").addEventListener("click", () => safeLoad("Reset carrera", resetRun));
   $("calibrateQtr").addEventListener("click", () => safeLoad("Calibrar QTR", calibrateQtr));
+  $("enableObstacles").addEventListener("click", () => safeLoad("Activar obstaculos", () => setObstacleHandling(true)));
+  $("disableObstacles").addEventListener("click", () => safeLoad("Quitar obstaculos", () => setObstacleHandling(false)));
+  $("obstacleGreen").addEventListener("click", () => safeLoad("Obstaculo verde", () => sendObstacleDecision("GREEN_SIGN")));
+  $("obstacleRed").addEventListener("click", () => safeLoad("Obstaculo rojo", () => sendObstacleDecision("RED_SIGN")));
+  $("obstacleBlack").addEventListener("click", () => safeLoad("Obstaculo negro", () => sendObstacleDecision("BLACK_SIGN")));
+  $("obstacleCameraAuto").addEventListener("click", () => safeLoad("Camara auto", setObstacleCameraAuto));
+  $("enableTurnPause").addEventListener("click", () => safeLoad("Pausar cruces", () => setTurnPause(true)));
+  $("disableTurnPause").addEventListener("click", () => safeLoad("Quitar pausa cruces", () => setTurnPause(false)));
+  $("continueTurn").addEventListener("click", () => safeLoad("Continuar giro", continueTurn));
 
   $("createUser").addEventListener("click", () => safeLoad("Crear usuario", createUser));
   $("userName").addEventListener("keydown", (event) => {
@@ -1131,6 +1610,15 @@ function bindEvents() {
 
   $("twitchLogin").addEventListener("click", () => safeLoad("Twitch", handleTwitchLogin));
   $("twitchLogout").addEventListener("click", logoutTwitch);
+  $("applyTwitchChannel").addEventListener("click", applyTwitchChannel);
+  $("twitchChannel").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applyTwitchChannel();
+  });
+  $("fitGraph").addEventListener("click", renderMazeGraph);
+  $("fullscreenGraph").addEventListener("click", () => {
+    const canvas = $("graphCanvas");
+    if (canvas?.requestFullscreen) canvas.requestFullscreen();
+  });
 }
 
 async function boot() {
@@ -1138,6 +1626,7 @@ async function boot() {
   updateBetChoices();
   renderUserPanel();
   renderTwitch();
+  renderTwitchChat();
   configureStreamFeedback();
   switchView(localStorage.getItem("robobet_view") || "admin");
   await loadTwitchProfile();

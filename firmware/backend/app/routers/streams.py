@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/streams", tags=["streams"])
 
-DEFAULT_FRONT_STREAM = "http://192.168.1.56/snapshot"
+DEFAULT_FRONT_STREAM = "http://192.168.1.56:81/stream"
 DEFAULT_OVERHEAD_STREAM = "http://127.0.0.1:8081/video"
 
 
@@ -24,7 +24,13 @@ def camera_endpoint(stream_url: Optional[str], endpoint: str) -> str:
     parsed = urlparse(stream_url or DEFAULT_FRONT_STREAM)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(400, "Invalid camera URL")
-    return urlunparse((parsed.scheme, parsed.netloc, f"/{endpoint}", "", "", ""))
+
+    # The ESP32-CAM serves MJPEG on port 81 and control endpoints on port 80.
+    # A stream URL from the UI must therefore be normalized before /status or /detect.
+    hostname = parsed.hostname or ""
+    port = 80 if parsed.port == 81 else parsed.port
+    netloc = hostname if port in {None, 80} else f"{hostname}:{port}"
+    return urlunparse((parsed.scheme, netloc, f"/{endpoint}", "", "", ""))
 
 
 def get_camera_json(stream_url: Optional[str], endpoint: str, timeout: float = 4.0) -> dict:

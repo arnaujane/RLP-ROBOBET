@@ -34,24 +34,60 @@
 #define CAMERA_SERIAL_REPORTS 0
 #endif
 
-#ifndef CAMERA_XCLK_FREQ_HZ
-#define CAMERA_XCLK_FREQ_HZ 10000000
+#ifndef CAMERA_DIAGNOSTIC_LOGS
+#define CAMERA_DIAGNOSTIC_LOGS 0
 #endif
 
-#ifndef CAMERA_FRAME_SIZE
-#define CAMERA_FRAME_SIZE FRAMESIZE_QVGA
+#ifndef CAMERA_DIAGNOSTIC_INTERVAL_MS
+#define CAMERA_DIAGNOSTIC_INTERVAL_MS 3000
 #endif
 
-#ifndef CAMERA_JPEG_QUALITY
-#define CAMERA_JPEG_QUALITY 82
-#endif
+#define CAMERA_PROFILE_FLUID 1
+#define CAMERA_PROFILE_BALANCED 2
+#define CAMERA_PROFILE_STABLE 3
 
-#ifndef CAMERA_STREAM_DELAY_MS
-#define CAMERA_STREAM_DELAY_MS 90
+#ifndef CAMERA_PROFILE
+#define CAMERA_PROFILE CAMERA_PROFILE_FLUID
 #endif
 
 #ifndef CAMERA_STREAM_MAX_MS
 #define CAMERA_STREAM_MAX_MS 12000
+#endif
+
+#ifndef CAMERA_STREAM_PORT
+#define CAMERA_STREAM_PORT 81
+#endif
+
+#ifndef CAMERA_SENSOR_BRIGHTNESS
+#define CAMERA_SENSOR_BRIGHTNESS 0
+#endif
+
+#ifndef CAMERA_SENSOR_CONTRAST
+#define CAMERA_SENSOR_CONTRAST 1
+#endif
+
+#ifndef CAMERA_SENSOR_SATURATION
+#define CAMERA_SENSOR_SATURATION 0
+#endif
+
+#ifndef CAMERA_SENSOR_SHARPNESS
+#define CAMERA_SENSOR_SHARPNESS -1
+#endif
+
+#ifndef CAMERA_SENSOR_AE_LEVEL
+#define CAMERA_SENSOR_AE_LEVEL 0
+#endif
+
+#ifndef CAMERA_SENSOR_GAIN_CEILING
+#define CAMERA_SENSOR_GAIN_CEILING GAINCEILING_8X
+#endif
+
+#ifndef CAMERA_SENSOR_HMIRROR
+#define CAMERA_SENSOR_HMIRROR 0
+#endif
+
+#ifndef CAMERA_SENSOR_VFLIP
+#define CAMERA_SENSOR_VFLIP 0
 #endif
 
 // AI Thinker ESP32-CAM pinout.
@@ -76,18 +112,86 @@ static constexpr uint32_t SIGN_REPORT_INTERVAL_MS = 400;
 static constexpr uint8_t DETECT_SAMPLE_COUNT = 3;
 static constexpr uint32_t DETECT_SAMPLE_DELAY_MS = 80;
 static constexpr uint32_t DETECT_FIRST_SAMPLE_DELAY_MS = 35;
-static constexpr uint32_t BACKGROUND_DETECT_INTERVAL_MS = 900;
+static constexpr uint32_t BACKGROUND_DETECT_INTERVAL_MS = 1500;
 static constexpr uint8_t MAX_CONSECUTIVE_CAPTURE_FAILURES = 6;
 static constexpr uint8_t ROI_LEFT_PERCENT = 20;
 static constexpr uint8_t ROI_RIGHT_PERCENT = 80;
 static constexpr uint8_t ROI_TOP_PERCENT = 15;
 static constexpr uint8_t ROI_BOTTOM_PERCENT = 85;
 static constexpr uint8_t ROI_SAMPLE_STEP = 3;
-static constexpr uint8_t MIN_COLOR_PERCENT = 2;
+static constexpr uint8_t MIN_RED_PERCENT = 1;
+static constexpr uint8_t MIN_GREEN_PERCENT = 1;
 static constexpr uint8_t MIN_BLACK_PERCENT = 10;
 static constexpr uint8_t DOMINANCE_MARGIN_PERCENT = 30;
+static constexpr uint8_t COLOR_MIN_BRIGHTNESS = 55;
+static constexpr uint8_t RED_MIN_CHANNEL = 55;
+static constexpr uint8_t GREEN_MIN_CHANNEL = 52;
+static constexpr uint8_t RED_MIN_DELTA = 12;
+static constexpr uint8_t GREEN_MIN_DELTA = 22;
+static constexpr uint8_t BLACK_MAX_CHANNEL = 65;
+static constexpr uint16_t BLACK_MAX_BRIGHTNESS = 145;
 
 WebServer server(80);
+WiFiServer streamServer(CAMERA_STREAM_PORT);
+
+struct CameraProfileConfig {
+  const char *name;
+  framesize_t frameSize;
+  uint8_t jpegQuality;
+  uint32_t xclkHz;
+  uint8_t fbCountWithPsram;
+  uint8_t fbCountWithoutPsram;
+  camera_grab_mode_t grabModeWithPsram;
+  camera_grab_mode_t grabModeWithoutPsram;
+  uint16_t streamDelayMs;
+  size_t minJpegBytes;
+};
+
+struct FrameDimensions {
+  uint16_t width;
+  uint16_t height;
+};
+
+CameraProfileConfig selectedCameraProfile() {
+#if CAMERA_PROFILE == CAMERA_PROFILE_BALANCED
+  return {"EQUILIBRADO", FRAMESIZE_VGA, 12, 20000000, 2, 1, CAMERA_GRAB_LATEST, CAMERA_GRAB_WHEN_EMPTY, 35, 7000};
+#elif CAMERA_PROFILE == CAMERA_PROFILE_STABLE
+  return {"ESTABLE", FRAMESIZE_QVGA, 18, 10000000, 1, 1, CAMERA_GRAB_WHEN_EMPTY, CAMERA_GRAB_WHEN_EMPTY, 80, 2500};
+#else
+  return {"FLUIDO", FRAMESIZE_QVGA, 12, 20000000, 2, 1, CAMERA_GRAB_LATEST, CAMERA_GRAB_WHEN_EMPTY, 20, 2500};
+#endif
+}
+
+FrameDimensions dimensionsForFrameSize(framesize_t frameSize) {
+  switch (frameSize) {
+    case FRAMESIZE_QQVGA: return {160, 120};
+    case FRAMESIZE_QVGA: return {320, 240};
+    case FRAMESIZE_VGA: return {640, 480};
+    case FRAMESIZE_SVGA: return {800, 600};
+    case FRAMESIZE_XGA: return {1024, 768};
+    default: return {320, 240};
+  }
+}
+
+const char *frameSizeName(framesize_t frameSize) {
+  switch (frameSize) {
+    case FRAMESIZE_QQVGA: return "QQVGA";
+    case FRAMESIZE_QVGA: return "QVGA";
+    case FRAMESIZE_VGA: return "VGA";
+    case FRAMESIZE_SVGA: return "SVGA";
+    case FRAMESIZE_XGA: return "XGA";
+    default: return "CUSTOM";
+  }
+}
+
+const char *grabModeName(camera_grab_mode_t grabMode) {
+  return grabMode == CAMERA_GRAB_LATEST ? "latest" : "when_empty";
+}
+
+CameraProfileConfig cameraProfile = selectedCameraProfile();
+bool psramAvailable = false;
+uint8_t activeFbCount = 1;
+camera_grab_mode_t activeGrabMode = CAMERA_GRAB_WHEN_EMPTY;
 
 String lastSign = "NO_SIGN";
 String networkMode = "booting";
@@ -96,6 +200,7 @@ uint32_t lastSignReportMs = 0;
 uint32_t lastBackgroundDetectMs = 0;
 uint32_t lastCaptureOkMs = 0;
 uint32_t lastRecoveryAttemptMs = 0;
+uint32_t lastDiagnosticLogMs = 0;
 uint32_t frameCounter = 0;
 uint32_t lastFpsWindowMs = 0;
 float fps = 0.0f;
@@ -103,6 +208,13 @@ bool cameraReady = false;
 uint32_t cameraInitFailures = 0;
 uint32_t captureFailures = 0;
 uint32_t corruptFrames = 0;
+uint32_t slowCaptureFrames = 0;
+uint32_t streamClientsAccepted = 0;
+uint32_t streamWriteFailures = 0;
+uint32_t lastFrameBytes = 0;
+uint32_t lastCaptureDurationMs = 0;
+uint16_t lastFrameWidth = 0;
+uint16_t lastFrameHeight = 0;
 uint8_t consecutiveCaptureFailures = 0;
 uint32_t lastRedPixels = 0;
 uint32_t lastGreenPixels = 0;
@@ -115,6 +227,9 @@ uint8_t lastGreenVotes = 0;
 uint8_t lastBlackVotes = 0;
 uint8_t lastNoSignVotes = 0;
 String lastReason = "booting";
+WiFiClient activeStreamClient;
+bool hasActiveStreamClient = false;
+uint32_t nextStreamFrameMs = 0;
 
 struct ColorStats {
   uint32_t red = 0;
@@ -142,7 +257,64 @@ void reportSign(bool force = false) {
 #endif
 }
 
-ColorStats analyzeFrame(camera_fb_t *fb) {
+void accumulateColorStats(ColorStats &stats, uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t maxChannel = max(r, max(g, b));
+  uint8_t minChannel = min(r, min(g, b));
+  uint16_t brightness = static_cast<uint16_t>(r) + g + b;
+  bool usableColor = brightness >= COLOR_MIN_BRIGHTNESS && maxChannel > minChannel + 12;
+
+  bool warmRed = r >= 80 &&
+                 r + 10 >= g &&
+                 g > b + 16 &&
+                 r > b + 22;
+  bool red = usableColor &&
+             r >= RED_MIN_CHANNEL &&
+             r > b + RED_MIN_DELTA &&
+             ((r > g + RED_MIN_DELTA && r * 100 > g * 108) || warmRed) &&
+             r * 100 > b * 112;
+  bool green = usableColor &&
+               g >= GREEN_MIN_CHANNEL &&
+               g > r + GREEN_MIN_DELTA &&
+               g > b + GREEN_MIN_DELTA &&
+               g * 100 > r * 125 &&
+               g * 100 > b * 112;
+  bool black = brightness < BLACK_MAX_BRIGHTNESS && maxChannel < BLACK_MAX_CHANNEL;
+  if (red) {
+    stats.red++;
+  }
+  if (green) {
+    stats.green++;
+  }
+  if (black) {
+    stats.black++;
+  }
+  stats.sampled++;
+}
+
+ColorStats analyzeRgbPixelStream(const uint8_t *pixels, uint16_t width, uint16_t height, uint8_t bytesPerPixel) {
+  ColorStats stats;
+  if (!pixels || width == 0 || height == 0 || bytesPerPixel == 0) {
+    return stats;
+  }
+
+  const uint16_t xStart = (width * ROI_LEFT_PERCENT) / 100;
+  const uint16_t xEnd = (width * ROI_RIGHT_PERCENT) / 100;
+  const uint16_t yStart = (height * ROI_TOP_PERCENT) / 100;
+  const uint16_t yEnd = (height * ROI_BOTTOM_PERCENT) / 100;
+
+  for (uint16_t y = yStart; y < yEnd; y += ROI_SAMPLE_STEP) {
+    for (uint16_t x = xStart; x < xEnd; x += ROI_SAMPLE_STEP) {
+      const size_t i = (static_cast<size_t>(y) * width + x) * bytesPerPixel;
+      uint8_t r = pixels[i];
+      uint8_t g = pixels[i + 1];
+      uint8_t b = pixels[i + 2];
+      accumulateColorStats(stats, r, g, b);
+    }
+  }
+  return stats;
+}
+
+ColorStats analyzeRgb565Frame(camera_fb_t *fb) {
   ColorStats stats;
   if (!fb || fb->format != PIXFORMAT_RGB565) {
     return stats;
@@ -160,31 +332,51 @@ ColorStats analyzeFrame(camera_fb_t *fb) {
     for (uint16_t x = xStart; x < xEnd; x += ROI_SAMPLE_STEP) {
       const size_t i = static_cast<size_t>(y) * width + x;
       uint16_t p = pixels[i];
-      uint8_t r = ((p >> 11) & 0x1F) * 255 / 31;
-      uint8_t g = ((p >> 5) & 0x3F) * 255 / 63;
-      uint8_t b = (p & 0x1F) * 255 / 31;
-
-      uint8_t maxChannel = max(r, max(g, b));
-      uint8_t minChannel = min(r, min(g, b));
-      uint16_t brightness = static_cast<uint16_t>(r) + g + b;
-      bool saturatedEnough = maxChannel > minChannel + 28;
-
-      bool red = r > 90 && saturatedEnough && r * 100 > g * 145 && r * 100 > b * 145;
-      bool green = g > 85 && saturatedEnough && g * 100 > r * 140 && g * 100 > b * 135;
-      bool black = brightness < 145 && maxChannel < 65;
-      if (red) {
-        stats.red++;
-      }
-      if (green) {
-        stats.green++;
-      }
-      if (black) {
-        stats.black++;
-      }
-      stats.sampled++;
+      uint8_t rgb[3] = {
+          static_cast<uint8_t>(((p >> 11) & 0x1F) * 255 / 31),
+          static_cast<uint8_t>(((p >> 5) & 0x3F) * 255 / 63),
+          static_cast<uint8_t>((p & 0x1F) * 255 / 31),
+      };
+      accumulateColorStats(stats, rgb[0], rgb[1], rgb[2]);
     }
   }
   return stats;
+}
+
+ColorStats analyzeJpegFrame(camera_fb_t *fb) {
+  ColorStats stats;
+  if (!fb || fb->format != PIXFORMAT_JPEG || fb->width == 0 || fb->height == 0) {
+    return stats;
+  }
+
+  const size_t rgbLen = static_cast<size_t>(fb->width) * fb->height * 3;
+  uint8_t *rgb = static_cast<uint8_t *>(psramAvailable ? ps_malloc(rgbLen) : malloc(rgbLen));
+  if (!rgb) {
+    lastReason = "rgb_alloc_failed";
+    return stats;
+  }
+
+  bool decoded = fmt2rgb888(fb->buf, fb->len, fb->format, rgb);
+  if (decoded) {
+    stats = analyzeRgbPixelStream(rgb, fb->width, fb->height, 3);
+  } else {
+    lastReason = "jpeg_decode_failed";
+  }
+  free(rgb);
+  return stats;
+}
+
+ColorStats analyzeFrame(camera_fb_t *fb) {
+  if (!fb) {
+    return {};
+  }
+  if (fb->format == PIXFORMAT_JPEG) {
+    return analyzeJpegFrame(fb);
+  }
+  if (fb->format == PIXFORMAT_RGB565) {
+    return analyzeRgb565Frame(fb);
+  }
+  return {};
 }
 
 uint8_t percentOf(uint32_t value, uint32_t total) {
@@ -218,35 +410,35 @@ DetectionResult classifySign(const ColorStats &stats) {
   uint8_t greenPercent = percentOf(stats.green, stats.sampled);
   uint8_t blackPercent = percentOf(stats.black, stats.sampled);
 
-  bool blackStrong = blackPercent >= MIN_BLACK_PERCENT && stats.black > (stats.red + stats.green) * 2;
-  bool redStrong = redPercent >= MIN_COLOR_PERCENT && dominates(stats.red, stats.green) && stats.red > stats.black;
-  bool greenStrong = greenPercent >= MIN_COLOR_PERCENT && dominates(stats.green, stats.red) && stats.green > stats.black;
-
-  if (blackStrong) {
-    result.sign = "BLACK_SIGN";
-    result.confidence = confidenceFromPercent(blackPercent, MIN_BLACK_PERCENT);
-    result.reason = "black_roi_dominant";
-    return result;
-  }
+  bool redStrong = redPercent >= MIN_RED_PERCENT && dominates(stats.red, stats.green);
+  bool greenStrong = greenPercent >= MIN_GREEN_PERCENT && dominates(stats.green, stats.red);
+  bool blackStrong = blackPercent >= MIN_BLACK_PERCENT && stats.black > (stats.red + stats.green) * 3;
 
   if (redStrong && !greenStrong) {
     result.sign = "RED_SIGN";
-    result.confidence = confidenceFromPercent(redPercent, MIN_COLOR_PERCENT);
+    result.confidence = confidenceFromPercent(redPercent, MIN_RED_PERCENT);
     result.reason = "red_roi_dominant";
     return result;
   }
 
   if (greenStrong && !redStrong) {
     result.sign = "GREEN_SIGN";
-    result.confidence = confidenceFromPercent(greenPercent, MIN_COLOR_PERCENT);
+    result.confidence = confidenceFromPercent(greenPercent, MIN_GREEN_PERCENT);
     result.reason = "green_roi_dominant";
     return result;
   }
 
   if (redStrong && greenStrong) {
     result.sign = redPercent >= greenPercent ? "RED_SIGN" : "GREEN_SIGN";
-    result.confidence = confidenceFromPercent(max(redPercent, greenPercent), MIN_COLOR_PERCENT) / 2;
+    result.confidence = confidenceFromPercent(max(redPercent, greenPercent), MIN_GREEN_PERCENT) / 2;
     result.reason = "mixed_color_low_confidence";
+    return result;
+  }
+
+  if (blackStrong) {
+    result.sign = "BLACK_SIGN";
+    result.confidence = confidenceFromPercent(blackPercent, MIN_BLACK_PERCENT);
+    result.reason = "black_roi_dominant";
     return result;
   }
 
@@ -283,14 +475,34 @@ size_t expectedRgb565Length(const camera_fb_t *fb) {
   return static_cast<size_t>(fb->width) * static_cast<size_t>(fb->height) * 2;
 }
 
+bool jpegHasStartMarker(const camera_fb_t *fb) {
+  return fb && fb->len >= 2 && fb->buf[0] == 0xFF && fb->buf[1] == 0xD8;
+}
+
+bool jpegHasEndMarker(const camera_fb_t *fb) {
+  if (!fb || fb->len < 2) {
+    return false;
+  }
+  const size_t scanStart = fb->len > 32 ? fb->len - 32 : 0;
+  for (size_t i = scanStart; i + 1 < fb->len; i++) {
+    if (fb->buf[i] == 0xFF && fb->buf[i + 1] == 0xD9) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool frameLooksValid(const camera_fb_t *fb) {
   if (!fb || !fb->buf || fb->len == 0 || fb->width == 0 || fb->height == 0) {
     return false;
   }
-  if (fb->format != PIXFORMAT_RGB565) {
-    return false;
+  if (fb->format == PIXFORMAT_JPEG) {
+    return fb->len >= cameraProfile.minJpegBytes && jpegHasStartMarker(fb) && jpegHasEndMarker(fb);
   }
-  return fb->len >= expectedRgb565Length(fb);
+  if (fb->format == PIXFORMAT_RGB565) {
+    return fb->len >= expectedRgb565Length(fb);
+  }
+  return false;
 }
 
 void recordCaptureFailure(bool corrupt = false) {
@@ -337,80 +549,53 @@ void recoverCameraIfNeeded() {
   cameraReady = setupCamera();
 }
 
-bool captureAndUpdateSign(String *detected = nullptr) {
+camera_fb_t *captureValidFrame() {
   if (!cameraReady) {
     recordCaptureFailure();
     recoverCameraIfNeeded();
-    return false;
+    return nullptr;
   }
 
+  uint32_t captureStartMs = millis();
   camera_fb_t *fb = esp_camera_fb_get();
+  lastCaptureDurationMs = millis() - captureStartMs;
   if (!fb) {
     recordCaptureFailure();
     recoverCameraIfNeeded();
-    return false;
+    return nullptr;
   }
 
   if (!frameLooksValid(fb)) {
     esp_camera_fb_return(fb);
     recordCaptureFailure(true);
     recoverCameraIfNeeded();
+    return nullptr;
+  }
+
+  lastFrameBytes = fb->len;
+  lastFrameWidth = fb->width;
+  lastFrameHeight = fb->height;
+  if (lastCaptureDurationMs > 450) {
+    slowCaptureFrames++;
+  }
+  recordCaptureOk();
+  return fb;
+}
+
+bool captureAndUpdateSign(String *detected = nullptr) {
+  camera_fb_t *fb = captureValidFrame();
+  if (!fb) {
     return false;
   }
 
   String sign = updateSign(fb);
   updateFps();
   esp_camera_fb_return(fb);
-  recordCaptureOk();
 
   if (detected != nullptr) {
     *detected = sign;
   }
   return true;
-}
-
-bool captureJpeg(uint8_t **jpg, size_t *jpgLen) {
-  *jpg = nullptr;
-  *jpgLen = 0;
-
-  if (!cameraReady) {
-    recordCaptureFailure();
-    recoverCameraIfNeeded();
-    return false;
-  }
-
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    recordCaptureFailure();
-    recoverCameraIfNeeded();
-    return false;
-  }
-
-  if (!frameLooksValid(fb)) {
-    esp_camera_fb_return(fb);
-    recordCaptureFailure(true);
-    recoverCameraIfNeeded();
-    return false;
-  }
-
-  updateSign(fb);
-  updateFps();
-
-  bool ok = frame2jpg(fb, CAMERA_JPEG_QUALITY, jpg, jpgLen);
-  esp_camera_fb_return(fb);
-  if (ok && *jpg != nullptr && *jpgLen > 0) {
-    recordCaptureOk();
-    return true;
-  }
-
-  recordCaptureFailure();
-  if (*jpg != nullptr) {
-    free(*jpg);
-    *jpg = nullptr;
-  }
-  *jpgLen = 0;
-  recoverCameraIfNeeded();
-  return false;
 }
 
 void discardStaleFrame() {
@@ -424,13 +609,14 @@ void discardStaleFrame() {
 }
 
 String chooseSignFromVotes(uint8_t redVotes, uint8_t greenVotes, uint8_t blackVotes, uint8_t noSignVotes) {
-  if (blackVotes >= 3 && blackVotes > redVotes && blackVotes > greenVotes && blackVotes > noSignVotes) {
+  const uint8_t requiredVotes = max<uint8_t>(2, (DETECT_SAMPLE_COUNT / 2) + 1);
+  if (blackVotes >= requiredVotes && blackVotes > redVotes && blackVotes > greenVotes && blackVotes > noSignVotes) {
     return "BLACK_SIGN";
   }
-  if (redVotes >= 3 && redVotes > greenVotes && redVotes > blackVotes && redVotes > noSignVotes) {
+  if (redVotes >= requiredVotes && redVotes > greenVotes && redVotes > blackVotes && redVotes > noSignVotes) {
     return "RED_SIGN";
   }
-  if (greenVotes >= 3 && greenVotes > redVotes && greenVotes > blackVotes && greenVotes > noSignVotes) {
+  if (greenVotes >= requiredVotes && greenVotes > redVotes && greenVotes > blackVotes && greenVotes > noSignVotes) {
     return "GREEN_SIGN";
   }
   return "NO_SIGN";
@@ -517,8 +703,44 @@ void sendJsonResponse(const String &body) {
   server.send(200, "application/json", body);
 }
 
+void configureCameraSensor(sensor_t *sensor) {
+  if (!sensor) {
+    return;
+  }
+
+  // OV2640 tuning for a moving robot: automatic exposure/white balance stay on,
+  // while saturation and sharpness are restrained to reduce chroma noise.
+  sensor->set_framesize(sensor, cameraProfile.frameSize);
+  sensor->set_quality(sensor, cameraProfile.jpegQuality);
+  sensor->set_brightness(sensor, CAMERA_SENSOR_BRIGHTNESS);
+  sensor->set_contrast(sensor, CAMERA_SENSOR_CONTRAST);
+  sensor->set_saturation(sensor, CAMERA_SENSOR_SATURATION);
+  sensor->set_sharpness(sensor, CAMERA_SENSOR_SHARPNESS);
+  sensor->set_denoise(sensor, 1);
+  sensor->set_special_effect(sensor, 0);
+  sensor->set_whitebal(sensor, 1);
+  sensor->set_awb_gain(sensor, 1);
+  sensor->set_wb_mode(sensor, 0);
+  sensor->set_exposure_ctrl(sensor, 1);
+  sensor->set_aec2(sensor, 1);
+  sensor->set_ae_level(sensor, CAMERA_SENSOR_AE_LEVEL);
+  sensor->set_gain_ctrl(sensor, 1);
+  sensor->set_gainceiling(sensor, static_cast<gainceiling_t>(CAMERA_SENSOR_GAIN_CEILING));
+  sensor->set_bpc(sensor, 1);
+  sensor->set_wpc(sensor, 1);
+  sensor->set_raw_gma(sensor, 1);
+  sensor->set_lenc(sensor, 1);
+  sensor->set_dcw(sensor, 1);
+  sensor->set_hmirror(sensor, CAMERA_SENSOR_HMIRROR);
+  sensor->set_vflip(sensor, CAMERA_SENSOR_VFLIP);
+}
+
 bool setupCamera() {
   cameraReady = false;
+  cameraProfile = selectedCameraProfile();
+  psramAvailable = psramFound();
+  activeFbCount = psramAvailable ? cameraProfile.fbCountWithPsram : cameraProfile.fbCountWithoutPsram;
+  activeGrabMode = psramAvailable ? cameraProfile.grabModeWithPsram : cameraProfile.grabModeWithoutPsram;
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -539,13 +761,13 @@ bool setupCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = CAMERA_XCLK_FREQ_HZ;
-  config.pixel_format = PIXFORMAT_RGB565;
-  config.frame_size = CAMERA_FRAME_SIZE;
-  config.jpeg_quality = 14;
-  config.fb_count = 1;
-  config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.xclk_freq_hz = cameraProfile.xclkHz;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = cameraProfile.frameSize;
+  config.jpeg_quality = cameraProfile.jpegQuality;
+  config.fb_count = activeFbCount;
+  config.fb_location = psramAvailable ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
+  config.grab_mode = activeGrabMode;
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
@@ -554,28 +776,7 @@ bool setupCamera() {
     return false;
   }
 
-  sensor_t *sensor = esp_camera_sensor_get();
-  if (sensor) {
-    sensor->set_brightness(sensor, 0);
-    sensor->set_contrast(sensor, 1);
-    sensor->set_saturation(sensor, -1);
-    sensor->set_sharpness(sensor, -1);
-    sensor->set_denoise(sensor, 1);
-    sensor->set_special_effect(sensor, 0);
-    sensor->set_whitebal(sensor, 1);
-    sensor->set_awb_gain(sensor, 1);
-    sensor->set_wb_mode(sensor, 0);
-    sensor->set_exposure_ctrl(sensor, 1);
-    sensor->set_aec2(sensor, 1);
-    sensor->set_ae_level(sensor, 0);
-    sensor->set_gain_ctrl(sensor, 1);
-    sensor->set_gainceiling(sensor, GAINCEILING_8X);
-    sensor->set_bpc(sensor, 1);
-    sensor->set_wpc(sensor, 1);
-    sensor->set_raw_gma(sensor, 1);
-    sensor->set_lenc(sensor, 1);
-    sensor->set_dcw(sensor, 1);
-  }
+  configureCameraSensor(esp_camera_sensor_get());
   cameraReady = true;
   cameraHealth = "ok";
   lastCaptureOkMs = millis();
@@ -584,34 +785,52 @@ bool setupCamera() {
 
 void handleStatus() {
   JsonDocument doc;
+  FrameDimensions dims = dimensionsForFrameSize(cameraProfile.frameSize);
   addDetectionFields(doc);
   doc["camera_ready"] = cameraReady;
   doc["camera_health"] = cameraHealth;
+  doc["profile"] = cameraProfile.name;
   doc["capture_failures"] = captureFailures;
   doc["consecutive_failures"] = consecutiveCaptureFailures;
   doc["corrupt_frames"] = corruptFrames;
+  doc["slow_capture_frames"] = slowCaptureFrames;
   doc["camera_init_failures"] = cameraInitFailures;
+  doc["stream_clients"] = streamClientsAccepted;
+  doc["stream_write_failures"] = streamWriteFailures;
   doc["fps"] = fps;
   doc["wifi"] = WiFi.status() == WL_CONNECTED ? "connected" : "disconnected";
+  doc["rssi"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
   doc["ip"] = WiFi.localIP().toString();
   doc["mode"] = networkMode;
   doc["hostname"] = "esp32cam.local";
-  doc["xclk_hz"] = CAMERA_XCLK_FREQ_HZ;
-  doc["jpeg_quality"] = CAMERA_JPEG_QUALITY;
-  doc["stream_delay_ms"] = CAMERA_STREAM_DELAY_MS;
-  doc["frame_width"] = 320;
-  doc["frame_height"] = 240;
-  doc["pixel_format"] = "RGB565";
+  doc["stream_url"] = "http://" + WiFi.localIP().toString() + ":" + String(CAMERA_STREAM_PORT) + "/stream";
+  doc["xclk_hz"] = cameraProfile.xclkHz;
+  doc["jpeg_quality"] = cameraProfile.jpegQuality;
+  doc["stream_delay_ms"] = cameraProfile.streamDelayMs;
+  doc["frame_size"] = frameSizeName(cameraProfile.frameSize);
+  doc["frame_width"] = lastFrameWidth ? lastFrameWidth : dims.width;
+  doc["frame_height"] = lastFrameHeight ? lastFrameHeight : dims.height;
+  doc["last_frame_bytes"] = lastFrameBytes;
+  doc["last_capture_ms"] = lastCaptureDurationMs;
+  doc["pixel_format"] = "JPEG";
+  doc["psram_found"] = psramAvailable;
+  doc["fb_count"] = activeFbCount;
+  doc["grab_mode"] = grabModeName(activeGrabMode);
+  doc["free_heap"] = ESP.getFreeHeap();
+  doc["free_psram"] = psramAvailable ? ESP.getFreePsram() : 0;
   String body;
   serializeJson(doc, body);
   sendJsonResponse(body);
 }
 
 void handleRoot() {
-  server.send(
-      200,
-      "text/html",
-      "<html><body><h1>RoboBet ESP32-CAM</h1><p>Use /snapshot for the dashboard and /detect for robot decisions. /stream is available for short diagnostics.</p><p><a href='/snapshot'>snapshot</a></p><p><a href='/stream'>stream</a></p><p><a href='/status'>status</a></p><p><a href='/detect'>detect</a></p></body></html>");
+  String streamUrl = "http://" + WiFi.localIP().toString() + ":" + String(CAMERA_STREAM_PORT) + "/stream";
+  String html = "<html><body><h1>RoboBet ESP32-CAM</h1><p>MJPEG stream: <a href='";
+  html += streamUrl;
+  html += "'>";
+  html += streamUrl;
+  html += "</a></p><p>Control API stays on port 80 for /status, /snapshot and /detect.</p><p><a href='/snapshot'>snapshot</a></p><p><a href='/status'>status</a></p><p><a href='/detect'>detect</a></p></body></html>";
+  server.send(200, "text/html", html);
 }
 
 void handleDetect() {
@@ -638,24 +857,50 @@ void handleDetect() {
   sendJsonResponse(body);
 }
 
+bool writeJpegPayload(WiFiClient &client, camera_fb_t *fb) {
+  if (!client.connected() || !fb || fb->format != PIXFORMAT_JPEG) {
+    return false;
+  }
+  size_t written = client.write(fb->buf, fb->len);
+  return written == fb->len;
+}
+
+bool writeMultipartFrame(WiFiClient &client) {
+  camera_fb_t *fb = captureValidFrame();
+  if (!fb) {
+    return false;
+  }
+
+  client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", static_cast<unsigned int>(fb->len));
+  bool ok = writeJpegPayload(client, fb);
+  client.print("\r\n");
+  esp_camera_fb_return(fb);
+
+  if (ok) {
+    updateFps();
+  } else {
+    streamWriteFailures++;
+  }
+  return ok;
+}
+
 void handleSnapshot() {
   WiFiClient client = server.client();
-  uint8_t *jpg = nullptr;
-  size_t jpgLen = 0;
-
-  if (!captureJpeg(&jpg, &jpgLen)) {
+  camera_fb_t *fb = captureValidFrame();
+  if (!fb) {
     server.send(503, "text/plain", cameraHealth);
     return;
   }
 
   client.print("HTTP/1.1 200 OK\r\n");
   client.print("Content-Type: image/jpeg\r\n");
-  client.printf("Content-Length: %u\r\n", static_cast<unsigned int>(jpgLen));
+  client.printf("Content-Length: %u\r\n", static_cast<unsigned int>(fb->len));
   client.print("Cache-Control: no-store\r\n");
   client.print("Access-Control-Allow-Origin: *\r\n");
   client.print("Connection: close\r\n\r\n");
-  client.write(jpg, jpgLen);
-  free(jpg);
+  writeJpegPayload(client, fb);
+  esp_camera_fb_return(fb);
+  updateFps();
 }
 
 void handleStream() {
@@ -669,23 +914,85 @@ void handleStream() {
   client.print("Connection: close\r\n\r\n");
 
   while (client.connected() && millis() - streamStartMs < CAMERA_STREAM_MAX_MS) {
-    uint8_t *jpg = nullptr;
-    size_t jpgLen = 0;
-    if (!captureJpeg(&jpg, &jpgLen)) {
-      delay(20);
+    if (!writeMultipartFrame(client)) {
+      delay(10);
       continue;
     }
-
-    client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", static_cast<unsigned int>(jpgLen));
-    client.write(jpg, jpgLen);
-    client.print("\r\n");
-    free(jpg);
 
     if (!client.connected()) {
       break;
     }
-    delay(CAMERA_STREAM_DELAY_MS);
+    delay(cameraProfile.streamDelayMs);
   }
+}
+
+void stopDedicatedStreamClient() {
+  if (hasActiveStreamClient) {
+    activeStreamClient.stop();
+    hasActiveStreamClient = false;
+  }
+}
+
+void drainStreamHttpRequest(WiFiClient &client) {
+  client.setTimeout(180);
+  uint32_t deadline = millis() + 260;
+  while (client.connected() && millis() < deadline) {
+    if (!client.available()) {
+      delay(1);
+      continue;
+    }
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) {
+      break;
+    }
+  }
+}
+
+void acceptDedicatedStreamClient() {
+  WiFiClient candidate = streamServer.available();
+  if (!candidate) {
+    return;
+  }
+
+  if (hasActiveStreamClient && activeStreamClient.connected()) {
+    candidate.print("HTTP/1.1 503 Busy\r\nConnection: close\r\n\r\n");
+    candidate.stop();
+    return;
+  }
+
+  activeStreamClient = candidate;
+  activeStreamClient.setNoDelay(true);
+  drainStreamHttpRequest(activeStreamClient);
+  activeStreamClient.print("HTTP/1.1 200 OK\r\n");
+  activeStreamClient.print("Content-Type: multipart/x-mixed-replace; boundary=frame\r\n");
+  activeStreamClient.print("Cache-Control: no-cache, no-store, must-revalidate\r\n");
+  activeStreamClient.print("Pragma: no-cache\r\n");
+  activeStreamClient.print("Access-Control-Allow-Origin: *\r\n");
+  activeStreamClient.print("Connection: close\r\n\r\n");
+  hasActiveStreamClient = true;
+  streamClientsAccepted++;
+  nextStreamFrameMs = 0;
+}
+
+void handleDedicatedStreamServer() {
+  if (hasActiveStreamClient && !activeStreamClient.connected()) {
+    stopDedicatedStreamClient();
+  }
+
+  acceptDedicatedStreamClient();
+
+  if (!hasActiveStreamClient || millis() < nextStreamFrameMs) {
+    return;
+  }
+
+  bool ok = writeMultipartFrame(activeStreamClient);
+  if (!activeStreamClient.connected()) {
+    stopDedicatedStreamClient();
+    return;
+  }
+
+  nextStreamFrameMs = millis() + (ok ? cameraProfile.streamDelayMs : 35);
 }
 
 bool applyStaticIpConfig() {
@@ -706,6 +1013,9 @@ bool applyStaticIpConfig() {
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (!applyStaticIpConfig()) {
     Serial.println("Static IP configuration failed; using DHCP.");
   }
@@ -738,6 +1048,20 @@ void connectWiFi() {
   Serial.println("Password: robobetcam");
   Serial.print("AP IP: ");
   Serial.println(WiFi.softAPIP());
+}
+
+void maintainWiFi() {
+  static uint32_t lastReconnectAttemptMs = 0;
+  if (networkMode != "wifi" || WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+  if (millis() - lastReconnectAttemptMs < 5000) {
+    return;
+  }
+  lastReconnectAttemptMs = millis();
+  stopDedicatedStreamClient();
+  WiFi.disconnect();
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
 void handleSerialCommand(const String &rawCommand) {
@@ -783,6 +1107,35 @@ void updateBackgroundDetection() {
   captureAndUpdateSign();
 }
 
+void logCameraDiagnostics(bool force = false) {
+#if CAMERA_DIAGNOSTIC_LOGS
+  if (!force && millis() - lastDiagnosticLogMs < CAMERA_DIAGNOSTIC_INTERVAL_MS) {
+    return;
+  }
+  lastDiagnosticLogMs = millis();
+  Serial.printf(
+      "[CAM] profile=%s pixel=JPEG fps=%.1f frame=%ux%u %.1fKB capture=%ums q=%u xclk=%u fb=%u grab=%s rssi=%d heap=%u psram=%u health=%s corrupt=%u fail=%u\n",
+      cameraProfile.name,
+      fps,
+      lastFrameWidth,
+      lastFrameHeight,
+      lastFrameBytes / 1024.0f,
+      lastCaptureDurationMs,
+      cameraProfile.jpegQuality,
+      static_cast<unsigned int>(cameraProfile.xclkHz),
+      activeFbCount,
+      grabModeName(activeGrabMode),
+      WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
+      ESP.getFreeHeap(),
+      psramAvailable ? ESP.getFreePsram() : 0,
+      cameraHealth.c_str(),
+      static_cast<unsigned int>(corruptFrames),
+      static_cast<unsigned int>(captureFailures));
+#else
+  (void)force;
+#endif
+}
+
 void setupServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleStatus);
@@ -790,6 +1143,8 @@ void setupServer() {
   server.on("/snapshot", HTTP_GET, handleSnapshot);
   server.on("/stream", HTTP_GET, handleStream);
   server.begin();
+  streamServer.begin();
+  streamServer.setNoDelay(true);
 }
 
 void setup() {
@@ -800,13 +1155,17 @@ void setup() {
   cameraReady = setupCamera();
   setupServer();
   lastFpsWindowMs = millis();
+  logCameraDiagnostics(true);
   reportSign(true);
 }
 
 void loop() {
   server.handleClient();
+  handleDedicatedStreamServer();
   handleSerialCommands();
+  maintainWiFi();
   updateBackgroundDetection();
+  logCameraDiagnostics(false);
   reportSign(false);
-  delay(5);
+  delay(1);
 }

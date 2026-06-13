@@ -1,8 +1,17 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=32)
+
+
+class TwitchUserCreate(BaseModel):
+    twitch_id: Optional[str] = None
+    login: str = Field(min_length=1, max_length=64)
+    display_name: Optional[str] = Field(default=None, max_length=64)
+    profile_image_url: Optional[str] = None
 
 
 class BetCreate(BaseModel):

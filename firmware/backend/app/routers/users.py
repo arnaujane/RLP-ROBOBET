@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import DEFAULT_STARTING_BALANCE
 from ..database import db, row_to_dict, rows_to_dicts
-from ..schemas import UserCreate
+from ..schemas import TwitchUserCreate, UserCreate
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -29,6 +29,48 @@ def create_user(payload: UserCreate) -> dict:
             if existing:
                 return row_to_dict(existing)
             raise
+        return row_to_dict(conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+def _available_user_name(conn, preferred: str, login: str) -> str:
+    base = (preferred or login).strip()[:32] or login[:32]
+    candidate = base
+    suffix = 2
+    while conn.execute("SELECT id FROM users WHERE name = ?", (candidate,)).fetchone():
+        tail = f"_{suffix}"
+        candidate = f"{base[:32 - len(tail)]}{tail}"
+        suffix += 1
+    return candidate
+
+
+@router.post("/twitch")
+def create_or_update_twitch_user(payload: TwitchUserCreate) -> dict:
+    login = payload.login.strip().lower()
+    display_name = (payload.display_name or payload.login).strip()
+    if not login:
+        raise HTTPException(400, "Twitch login cannot be empty")
+
+    with db() as conn:
+        existing = conn.execute("SELECT * FROM users WHERE twitch_login = ?", (login,)).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE users
+                SET twitch_id = ?, twitch_display_name = ?, profile_image_url = ?
+                WHERE id = ?
+                """,
+                (payload.twitch_id, display_name, payload.profile_image_url, existing["id"]),
+            )
+            return row_to_dict(conn.execute("SELECT * FROM users WHERE id = ?", (existing["id"],)).fetchone())
+
+        name = _available_user_name(conn, display_name, login)
+        cur = conn.execute(
+            """
+            INSERT INTO users(name, twitch_id, twitch_login, twitch_display_name, profile_image_url, balance)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (name, payload.twitch_id, login, display_name, payload.profile_image_url, DEFAULT_STARTING_BALANCE),
+        )
         return row_to_dict(conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
 
 

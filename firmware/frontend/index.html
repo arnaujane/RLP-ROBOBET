@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RoboBet Control</title>
-    <link rel="stylesheet" href="./styles.css?v=20260611-4" />
+    <link rel="stylesheet" href="./styles.css?v=20260613-1" />
   </head>
   <body>
     <header class="topbar">
@@ -104,6 +104,51 @@
               <button id="stopRun" class="danger" type="button">Parar</button>
               <button id="resetRun" class="secondary" type="button">Reset</button>
               <button id="calibrateQtr" class="secondary" type="button">Calibrar QTR</button>
+              <button id="enableObstacles" class="secondary" type="button">Activar obstaculos</button>
+              <button id="disableObstacles" class="secondary" type="button">Quitar obstaculos</button>
+              <button id="obstacleGreen" type="button">Verde pasa</button>
+              <button id="obstacleRed" class="danger" type="button">Rojo media vuelta</button>
+              <button id="obstacleBlack" class="secondary" type="button">Negro final</button>
+              <button id="obstacleCameraAuto" class="secondary" type="button">Camara auto</button>
+              <button id="enableTurnPause" class="secondary" type="button">Pausar en cruces</button>
+              <button id="disableTurnPause" class="secondary" type="button">Quitar pausa</button>
+              <button id="continueTurn" type="button">Continuar giro</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="admin-sensors">
+          <article class="panel sensor-panel top-sensor-panel">
+            <div class="panel-head">
+              <h3>Sensores infrarrojos</h3>
+              <span id="sensorSource" class="source-badge compact">Simulacion</span>
+            </div>
+            <div id="sensorBoard" class="sensor-board" aria-live="polite"></div>
+            <div class="sensor-meta">
+              <span id="sensorSummary">0/8 activos</span>
+              <span>Umbral <strong id="sensorThreshold">2500</strong></span>
+            </div>
+            <div id="qtrValues" class="sensor-values"></div>
+          </article>
+
+          <article class="panel graph-panel top-graph-panel">
+            <div class="panel-head">
+              <h3>Grafo detectado</h3>
+              <div class="panel-actions">
+                <span id="graphSummary" class="source-badge compact">0 nodos</span>
+                <button id="fitGraph" class="small secondary" type="button">Centrar</button>
+                <button id="fullscreenGraph" class="small secondary" type="button">Ampliar</button>
+              </div>
+            </div>
+            <div id="graphCanvas" class="graph-canvas">
+              <svg id="mazeGraph" viewBox="0 0 480 300" role="img" aria-label="Grafo del laberinto detectado"></svg>
+            </div>
+            <div class="graph-legend">
+              <span><i class="edge-normal"></i>Arista</span>
+              <span><i class="edge-frontier"></i>Salida pendiente</span>
+              <span><i class="edge-green"></i>Verde</span>
+              <span><i class="edge-blocked"></i>Bloqueada</span>
+              <span><i class="node-current"></i>Nodo actual</span>
             </div>
           </article>
         </section>
@@ -115,7 +160,7 @@
               <span id="frontStatus" class="stream-status">Sin imagen</span>
             </div>
             <div class="url-row">
-              <input id="frontUrl" class="url-input" placeholder="http://192.168.1.56/snapshot" />
+              <input id="frontUrl" class="url-input" placeholder="http://192.168.1.56:81/stream" />
               <button id="applyFrontUrl" class="small" type="button">Aplicar</button>
             </div>
             <div class="video-box">
@@ -139,19 +184,6 @@
         </section>
 
         <section class="admin-grid">
-          <article class="panel sensor-panel">
-            <div class="panel-head">
-              <h3>Sensores infrarrojos</h3>
-              <span id="sensorSource" class="source-badge compact">Simulacion</span>
-            </div>
-            <div id="sensorBoard" class="sensor-board" aria-live="polite"></div>
-            <div class="sensor-meta">
-              <span id="sensorSummary">0/8 activos</span>
-              <span>Umbral <strong id="sensorThreshold">2500</strong></span>
-            </div>
-            <div id="qtrValues" class="sensor-values"></div>
-          </article>
-
           <article class="panel camera-detect-panel">
             <div class="panel-head">
               <h3>Deteccion de camara</h3>
@@ -232,12 +264,36 @@
           </article>
         </section>
 
-        <section class="panel log-panel">
-          <div class="panel-head">
-            <h3>Eventos</h3>
-            <button id="clearLog" class="small secondary" type="button">Limpiar</button>
-          </div>
-          <pre id="eventLog"></pre>
+        <section class="broadcast-grid">
+          <article class="panel twitch-chat-panel">
+            <div class="panel-head">
+              <div>
+                <h3>Chat Twitch</h3>
+                <p class="panel-subtitle">Mismo canal para directo, votos y usuarios</p>
+              </div>
+              <span id="twitchChatStatus" class="source-badge compact">Sin canal</span>
+            </div>
+            <div class="twitch-config">
+              <input id="twitchChannel" placeholder="canal_twitch" maxlength="32" />
+              <button id="applyTwitchChannel" type="button">Aplicar</button>
+            </div>
+            <div class="twitch-chat-frame">
+              <iframe id="adminTwitchChat" title="Chat Twitch administrador" loading="lazy" sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals"></iframe>
+            </div>
+            <div class="chat-commands">
+              <span>!apuesta</span>
+              <span>!voto</span>
+              <span>!estado</span>
+            </div>
+          </article>
+
+          <article class="panel log-panel">
+            <div class="panel-head">
+              <h3>Eventos</h3>
+              <button id="clearLog" class="small secondary" type="button">Limpiar</button>
+            </div>
+            <pre id="eventLog"></pre>
+          </article>
         </section>
       </section>
 
@@ -343,6 +399,19 @@
             </div>
             <div id="polls" class="polls"></div>
           </article>
+
+          <article class="panel twitch-chat-panel viewer-chat">
+            <div class="panel-head">
+              <div>
+                <h3>Chat del directo</h3>
+                <p class="panel-subtitle">Participacion por Twitch</p>
+              </div>
+              <span id="userTwitchChatStatus" class="source-badge compact">Sin canal</span>
+            </div>
+            <div class="twitch-chat-frame">
+              <iframe id="userTwitchChat" title="Chat Twitch publico" loading="lazy" sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals"></iframe>
+            </div>
+          </article>
         </section>
 
         <section class="panel history-panel">
@@ -370,6 +439,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260611-4"></script>
+    <script src="./app.js?v=20260613-1"></script>
   </body>
 </html>
