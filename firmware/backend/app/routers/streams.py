@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/streams", tags=["streams"])
 
-DEFAULT_FRONT_STREAM = "http://192.168.1.56:81/stream"
+DEFAULT_FRONT_STREAM = "http://10.22.81.56:81/stream"
 DEFAULT_OVERHEAD_STREAM = "http://127.0.0.1:8081/video"
 
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RoboBet Control</title>
-    <link rel="stylesheet" href="./styles.css?v=20260613-1" />
+    <link rel="stylesheet" href="./styles.css?v=20260613-5" />
   </head>
   <body>
     <header class="topbar">
@@ -99,6 +99,14 @@
                 </select>
               </label>
             </div>
+            <div class="power-control">
+              <div class="power-control-head">
+                <label for="drivePowerSlider">Potencia base motores</label>
+                <strong id="drivePowerValue">11%</strong>
+              </div>
+              <input id="drivePowerSlider" type="range" min="5" max="100" step="1" value="11" />
+              <span id="drivePowerHint" class="power-control-hint">Ajuste en vivo del PWM base del seguidor de linea.</span>
+            </div>
             <div class="button-grid">
               <button id="startRun" type="button">Iniciar</button>
               <button id="stopRun" class="danger" type="button">Parar</button>
@@ -106,10 +114,6 @@
               <button id="calibrateQtr" class="secondary" type="button">Calibrar QTR</button>
               <button id="enableObstacles" class="secondary" type="button">Activar obstaculos</button>
               <button id="disableObstacles" class="secondary" type="button">Quitar obstaculos</button>
-              <button id="obstacleGreen" type="button">Verde pasa</button>
-              <button id="obstacleRed" class="danger" type="button">Rojo media vuelta</button>
-              <button id="obstacleBlack" class="secondary" type="button">Negro final</button>
-              <button id="obstacleCameraAuto" class="secondary" type="button">Camara auto</button>
               <button id="enableTurnPause" class="secondary" type="button">Pausar en cruces</button>
               <button id="disableTurnPause" class="secondary" type="button">Quitar pausa</button>
               <button id="continueTurn" type="button">Continuar giro</button>
@@ -265,6 +269,21 @@
         </section>
 
         <section class="broadcast-grid">
+          <article class="panel poll-panel admin-poll-panel">
+            <div class="panel-head">
+              <h3>Votaciones Twitch</h3>
+              <button id="adminLoadPolls" class="small secondary" type="button">Recargar</button>
+            </div>
+            <div id="adminVoteSummary" class="vote-summary"></div>
+            <div class="poll-actions">
+              <button data-poll-template="algorithm" type="button">Abrir DFS/BFS</button>
+              <button data-poll-template="obstacle_1" type="button">Abrir obstaculo 1</button>
+              <button data-poll-template="obstacle_2" type="button">Abrir obstaculo 2</button>
+              <button data-poll-template="obstacle_3" type="button">Abrir obstaculo 3</button>
+            </div>
+            <div id="adminPolls" class="polls"></div>
+          </article>
+
           <article class="panel twitch-chat-panel">
             <div class="panel-head">
               <div>
@@ -392,12 +411,8 @@
               <h3>Votaciones</h3>
               <button id="loadPolls" class="small secondary" type="button">Recargar</button>
             </div>
-            <div class="poll-actions">
-              <button data-poll-template="algorithm" type="button">Crear DFS/BFS</button>
-              <button data-poll-template="speed" type="button">Crear 80%</button>
-              <button data-poll-template="obstacle" type="button">Crear obstaculo</button>
-            </div>
-            <div id="polls" class="polls"></div>
+            <div id="userVoteSummary" class="vote-summary"></div>
+            <div id="userPolls" class="polls"></div>
           </article>
 
           <article class="panel twitch-chat-panel viewer-chat">
@@ -439,6 +454,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260613-1"></script>
+    <script src="./app.js?v=20260613-5"></script>
   </body>
 </html>

@@ -1,14 +1,16 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 const STREAM_DEFAULTS = {
-  front: "http://192.168.1.56:81/stream",
+  front: "http://10.22.81.56:81/stream",
   overhead: "http://127.0.0.1:8081/video",
 };
-const DEFAULT_TWITCH_CHANNEL = "";
+const DEFAULT_TWITCH_CHANNEL = "roger33833";
+const STALE_TWITCH_CHANNELS = new Set(["twitch_demo"]);
 const STALE_FRONT_URLS = new Set([
   "http://192.168.4.2/stream",
   "http://esp32cam.local/stream",
   "http://192.168.1.56/stream",
   "http://192.168.1.56/snapshot",
+  "http://192.168.1.56:81/stream",
 ]);
 const SENSOR_COUNT = 8;
 const DEFAULT_QTR_THRESHOLD = 2500;
@@ -43,6 +45,7 @@ const state = {
     state: "offline",
     algorithm: "DFS",
     speed_limit: 100,
+    drive_power_percent: 11,
     obstacle_count: 0,
     camera_sign: "NO_SIGN",
   },
@@ -179,6 +182,7 @@ function normalizeRobot(raw = {}) {
     state: raw.state || state.robot.state || "offline",
     algorithm: raw.algorithm || state.robot.algorithm || "DFS",
     speed_limit: Number(raw.speed_limit ?? raw.speedLimit ?? state.robot.speed_limit ?? 100),
+    drive_power_percent: Number(raw.drive_power_percent ?? raw.drivePowerPercent ?? state.robot.drive_power_percent ?? 11),
     obstacle_count: Number(raw.obstacle_count ?? raw.obstacleCount ?? state.robot.obstacle_count ?? 0),
     current_node: raw.current_node ?? raw.currentNode ?? state.robot.current_node ?? null,
     line_position: raw.line_position ?? raw.linePosition ?? state.robot.line_position ?? null,
@@ -234,6 +238,7 @@ function getRobotStateLabel(robot = state.robot) {
     TURN_RIGHT: "Girando derecha",
     TURN_BACK: "Media vuelta",
     WAITING_TURN_CONFIRMATION: "Esperando giro",
+    WAITING_OPERATOR_CLASSIFICATION: "Esperando operador",
     SEARCH_LINE: "Buscando linea",
     NODE_DETECTED: "Cruce detectado",
     SELECTING_EDGE: "Seleccionando ruta",
@@ -253,6 +258,7 @@ function getRobotStateLabel(robot = state.robot) {
 function getAlgorithmPhase(robot = state.robot) {
   const current = String(robot.state || "");
   const event = String(robot.last_event || "");
+  if (current.includes("WAITING_OPERATOR_CLASSIFICATION")) return "Esperando operador";
   if (current.includes("WAITING_OBSTACLE_DECISION")) return "Esperando obstaculo";
   if (current.includes("RETURNING_FROM_BLOCKED_OBSTACLE")) return "Volviendo al cruce";
   if (current.includes("RETURNING_TO_UNFINISHED_NODE")) return "Volviendo a nodo pendiente";
@@ -606,8 +612,8 @@ function renderRobotStatus() {
   const obstacleHandlingEnabled = Boolean(robot.obstacle_handling_enabled ?? robot.obstacleHandlingEnabled);
   const waitingObstacle = Boolean(robot.waiting_for_obstacle_decision ?? robot.waitingForObstacleDecision);
   const waitingObstacleMode = Boolean(robot.wait_for_obstacle_decision_enabled ?? robot.waitForObstacleDecisionEnabled);
-  const manualObstacleEnabled = Boolean(robot.manual_obstacle_sign_enabled ?? robot.manualObstacleSignEnabled);
-  const manualObstacleSign = robot.manual_obstacle_sign || robot.manualObstacleSign || "NO_SIGN";
+  const waitingOperatorClassification = Boolean(robot.waiting_for_operator_classification ?? robot.waitingForOperatorClassification);
+  const drivePowerPercent = Number(robot.drive_power_percent ?? robot.drivePowerPercent ?? 11);
   const statePill = $("adminStatePill");
   const stateText = String(robot.state || "offline");
 
@@ -618,8 +624,10 @@ function renderRobotStatus() {
 
   statePill.textContent = label;
   setText("adminStateText", stateText);
-  const activeAlert = waitingObstacle
-    ? "Obstaculo pendiente: pulsa verde, rojo o negro"
+  const activeAlert = waitingOperatorClassification
+    ? "Robot en pausa por incidencia"
+    : waitingObstacle
+    ? "Robot esperando decision"
     : waitingTurn
       ? `Giro pendiente: ${pendingTurn}`
       : robot.last_event || "Sin alertas activas";
@@ -631,6 +639,11 @@ function renderRobotStatus() {
   setText("mazeAlgorithm", robot.algorithm || "DFS");
   setText("liveAlgorithm", robot.algorithm || "DFS");
   setText("activeMode", phase);
+  setText("drivePowerValue", `${drivePowerPercent}%`);
+  setText("drivePowerHint", `PWM base actual del seguidor de linea: ${drivePowerPercent}%`);
+  if ($("drivePowerSlider") && document.activeElement !== $("drivePowerSlider")) {
+    $("drivePowerSlider").value = String(drivePowerPercent);
+  }
   setText("algorithmName", robot.algorithm || "DFS");
   setText("algorithmPhase", phase);
   setText("activeNode", robot.current_node !== null && robot.current_node !== undefined ? `${robot.current_node}/${nodeCount}` : "-");
@@ -647,22 +660,20 @@ function renderRobotStatus() {
   const progress = phase === "Finalizado" ? 100 : phase === "Retrocediendo" ? 66 : phase === "Explorando" ? 42 : 18;
   $("algorithmProgress").style.width = `${progress}%`;
 
-  const obstacleActive = waitingObstacle || phase === "Obstaculo" || Number(robot.obstacle_count) > 0;
-  setText("obstacleStatus", obstacleHandlingEnabled ? (waitingObstacle ? "Esperando decision" : obstacleActive ? "Obstaculo detectado" : "Obstaculos activos") : "Obstaculos desactivados");
-  setText("obstacleType", waitingObstacle ? "Botones manuales" : manualObstacleEnabled ? `Preparado ${manualObstacleSign}` : waitingObstacleMode ? "Parar y preguntar" : "Camara automatica");
+  const obstacleActive = waitingOperatorClassification || waitingObstacle || phase === "Obstaculo" || Number(robot.obstacle_count) > 0;
+  setText("obstacleStatus", obstacleHandlingEnabled ? (obstacleActive ? "Gestion activa" : "Sin incidencias") : "Obstaculos desactivados");
+  setText("obstacleType", waitingObstacleMode ? "Monitorizado" : "Automatico");
 
   const continueButton = $("continueTurn");
   const enableButton = $("enableTurnPause");
   const disableButton = $("disableTurnPause");
   const enableObstaclesButton = $("enableObstacles");
   const disableObstaclesButton = $("disableObstacles");
-  const obstacleCameraAutoButton = $("obstacleCameraAuto");
   if (continueButton) continueButton.disabled = !waitingTurn;
   if (enableButton) enableButton.disabled = pauseEnabled;
   if (disableButton) disableButton.disabled = !pauseEnabled;
   if (enableObstaclesButton) enableObstaclesButton.disabled = obstacleHandlingEnabled;
   if (disableObstaclesButton) disableObstaclesButton.disabled = !obstacleHandlingEnabled;
-  if (obstacleCameraAutoButton) obstacleCameraAutoButton.disabled = obstacleHandlingEnabled && !waitingObstacleMode && !waitingObstacle;
 }
 
 function renderDashboard() {
@@ -953,14 +964,129 @@ async function loadPolls() {
   renderPolls();
 }
 
-function renderPolls() {
-  $("polls").innerHTML = state.polls
+function latestPollForKinds(kinds = []) {
+  return state.polls
+    .filter((poll) => kinds.includes(String(poll.kind || "").toLowerCase()))
+    .sort((a, b) => Number(b.id) - Number(a.id))[0] || null;
+}
+
+function totalPollVotes(poll) {
+  const results = poll?.results || [];
+  return Number(poll?.total_votes ?? results.reduce((sum, item) => sum + Number(item.votes || 0), 0));
+}
+
+function pollLeader(poll) {
+  const results = (poll?.results || []).slice().sort((a, b) => Number(b.votes || 0) - Number(a.votes || 0));
+  return results[0]?.choice || null;
+}
+
+function voteCardMarkup({ label, stateText, tone, choice, meta }) {
+  return `
+    <div class="vote-card">
+      <div class="vote-card-head">
+        <span class="vote-label">${escapeHtml(label)}</span>
+        <span class="vote-chip ${escapeAttr(tone)}">${escapeHtml(stateText)}</span>
+      </div>
+      <strong class="vote-choice">${escapeHtml(choice)}</strong>
+      <span class="vote-meta">${escapeHtml(meta)}</span>
+    </div>
+  `;
+}
+
+function obstacleVoteCardMarkup(slot) {
+  const poll = latestPollForKinds([`obstacle_${slot}`]);
+  if (!poll) {
+    return voteCardMarkup({ label: `Obstaculo ${slot}`, stateText: "Pendiente", tone: "pending", choice: "Pendiente", meta: "Sin resolver" });
+  }
+
+  const totalVotes = totalPollVotes(poll);
+  const leader = pollLeader(poll);
+  if (poll.status === "open") {
+    return voteCardMarkup({
+      label: `Obstaculo ${slot}`,
+      stateText: "Abierta",
+      tone: "open",
+      choice: leader || "Pendiente",
+      meta: `!voto obstaculo${slot} sigue|stop`,
+    });
+  }
+
+  const winner = String(poll.winner || leader || "PENDIENTE").toUpperCase();
+  const tone = winner === "STOP" ? "red" : winner === "SIGUE" ? "green" : "pending";
+  return voteCardMarkup({
+    label: `Obstaculo ${slot}`,
+    stateText: winner === "STOP" ? "STOP" : winner === "SIGUE" ? "SIGUE" : "Pendiente",
+    tone,
+    choice: winner === "STOP" ? "STOP" : winner === "SIGUE" ? "SIGUE" : "Pendiente",
+    meta: `${totalVotes} votos cerrados`,
+  });
+}
+
+function algorithmVoteCardMarkup() {
+  const poll = latestPollForKinds(["algorithm"]);
+  if (!poll) {
+    return voteCardMarkup({ label: "Algoritmo", stateText: "Pendiente", tone: "pending", choice: "Sin decidir", meta: "Aun no hay votacion cerrada" });
+  }
+
+  const totalVotes = totalPollVotes(poll);
+  const leader = pollLeader(poll);
+  if (poll.status === "open") {
+    return voteCardMarkup({
+      label: "Algoritmo",
+      stateText: "Abierta",
+      tone: "open",
+      choice: leader || "Pendiente",
+      meta: "!voto algoritmo dfs|bfs",
+    });
+  }
+
+  const winner = String(poll.winner || leader || "SIN DECIDIR").toUpperCase();
+  return voteCardMarkup({
+    label: "Algoritmo",
+    stateText: "Cerrada",
+    tone: "green",
+    choice: winner,
+    meta: `${totalVotes} votos cerrados`,
+  });
+}
+
+function renderVoteSummary(targetId) {
+  const element = $(targetId);
+  if (!element) return;
+  element.innerHTML = `
+    ${algorithmVoteCardMarkup()}
+    <div class="vote-summary-grid">
+      ${obstacleVoteCardMarkup(1)}
+      ${obstacleVoteCardMarkup(2)}
+      ${obstacleVoteCardMarkup(3)}
+    </div>
+  `;
+}
+
+function pollTargetHint(poll) {
+  const kind = String(poll.kind || "").toLowerCase();
+  if (kind === "algorithm") return "algoritmo";
+  if (kind === "obstacle_1") return "obstaculo1";
+  if (kind === "obstacle_2") return "obstaculo2";
+  if (kind === "obstacle_3") return "obstaculo3";
+  return String(poll.id);
+}
+
+function renderPollList(targetId, { closable = false, votable = false } = {}) {
+  const container = $(targetId);
+  if (!container) return;
+  container.innerHTML = state.polls
     .map((poll) => {
       const results = poll.results || poll.options.map((option) => ({ choice: option, votes: 0 }));
       const totalVotes = Number(poll.total_votes ?? results.reduce((sum, item) => sum + Number(item.votes || 0), 0));
-      const options = poll.options
-        .map((option) => `<button data-vote="${poll.id}:${escapeAttr(option)}" type="button">${escapeHtml(option)}</button>`)
-        .join("");
+      const options = votable
+        ? poll.options.map((option) => `<button data-vote="${poll.id}:${escapeAttr(option)}" type="button">${escapeHtml(option)}</button>`).join("")
+        : "";
+      const optionHint = poll.options.map((option) => String(option).toLowerCase()).join(" / ");
+      const targetHint = pollTargetHint(poll);
+      const twitchHint = poll.status === "open"
+        ? `<div class="poll-subtitle">Twitch: <strong>!voto ${escapeHtml(targetHint)} ${escapeHtml(optionHint)}</strong></div>`
+        : "";
       const resultBars = results
         .map((item) => {
           const votes = Number(item.votes || 0);
@@ -974,11 +1100,12 @@ function renderPolls() {
           `;
         })
         .join("");
-      const closeButton = poll.status === "open" ? `<button class="small danger" data-close-poll="${poll.id}" type="button">Cerrar</button>` : "";
+      const closeButton = closable && poll.status === "open" ? `<button class="small danger" data-close-poll="${poll.id}" type="button">Cerrar encuesta</button>` : "";
       return `
         <div class="poll">
           <div class="poll-title">${escapeHtml(poll.title)}</div>
-          <div class="poll-options">${options}</div>
+          ${twitchHint}
+          ${options ? `<div class="poll-options">${options}</div>` : ""}
           <div class="poll-results">${resultBars}</div>
           <footer>
             <span>${escapeHtml(poll.kind)} - ${escapeHtml(poll.status)}${poll.winner ? ` - ganador ${escapeHtml(poll.winner)}` : ""}</span>
@@ -990,11 +1117,19 @@ function renderPolls() {
     .join("");
 }
 
+function renderPolls() {
+  renderVoteSummary("adminVoteSummary");
+  renderVoteSummary("userVoteSummary");
+  renderPollList("adminPolls", { closable: true, votable: false });
+  renderPollList("userPolls", { closable: false, votable: false });
+}
+
 async function createPollFromTemplate(kind) {
   const templates = {
     algorithm: { kind: "algorithm", title: "Algoritmo de la proxima carrera", options: ["DFS", "BFS"] },
-    speed: { kind: "speed", title: "Limitar motores al 80%", options: ["80", "100"] },
-    obstacle: { kind: "obstacle", title: "Activar obstaculo de usuario", options: ["edge_A", "edge_B", "edge_C"] },
+    obstacle_1: { kind: "obstacle_1", title: "Obstaculo 1", options: ["SIGUE", "STOP"] },
+    obstacle_2: { kind: "obstacle_2", title: "Obstaculo 2", options: ["SIGUE", "STOP"] },
+    obstacle_3: { kind: "obstacle_3", title: "Obstaculo 3", options: ["SIGUE", "STOP"] },
   };
   await api("/api/polls", { method: "POST", body: JSON.stringify(templates[kind]) });
   await loadPolls();
@@ -1067,33 +1202,14 @@ async function setObstacleHandling(enabled) {
   await refreshState();
 }
 
-async function setObstacleDecisionWait(enabled) {
+async function setDrivePower(percent) {
+  const safePercent = Math.max(5, Math.min(100, Number(percent) || 11));
   await api("/api/operator/command", {
     method: "POST",
-    body: JSON.stringify({ type: "SET_OBSTACLE_DECISION_WAIT", payload: { enabled } }),
+    body: JSON.stringify({ type: "SET_DRIVE_POWER", payload: { percent: safePercent } }),
   });
-}
-
-async function sendObstacleDecision(sign) {
-  await setObstacleDecisionWait(true);
-  await api("/api/operator/command", {
-    method: "POST",
-    body: JSON.stringify({ type: "RESOLVE_OBSTACLE", payload: { sign } }),
-  });
-  setOperatorMessage(`Decision obstaculo: ${sign}`);
-  await refreshState();
-}
-
-async function setObstacleCameraAuto() {
-  await api("/api/operator/command", {
-    method: "POST",
-    body: JSON.stringify({ type: "SET_OBSTACLE_HANDLING", payload: { enabled: true } }),
-  });
-  await api("/api/operator/command", {
-    method: "POST",
-    body: JSON.stringify({ type: "RESOLVE_OBSTACLE", payload: { sign: "CAMERA_AUTO" } }),
-  });
-  setOperatorMessage("Obstaculos por camara automatica");
+  setText("drivePowerValue", `${safePercent}%`);
+  setText("drivePowerHint", `PWM base objetivo: ${safePercent}%`);
   await refreshState();
 }
 
@@ -1354,7 +1470,10 @@ function connectWs() {
       renderDashboard();
     }
     if (payload.type) log(payload.type, payload);
-    if (["run_finished", "poll_closed"].includes(payload.type)) {
+    if (["poll_created", "poll_vote", "poll_closed"].includes(payload.type)) {
+      await safeLoad("Votaciones", loadPolls);
+    }
+    if (payload.type === "run_finished") {
       await Promise.all([safeLoad("Usuarios", loadUsers), safeLoad("Apuestas", loadBets), safeLoad("Detalle usuario", loadUserDetail), safeLoad("Votaciones", loadPolls), safeLoad("Historial", loadHistory)]);
     }
   };
@@ -1476,8 +1595,9 @@ function renderTwitch() {
   setText("twitchMeta", state.twitch.mode === "demo" ? "Sesion demo" : "Sesion Twitch");
   login.classList.add("hidden");
   logout.classList.remove("hidden");
-  if (!localStorage.getItem("robobet_twitch_channel")) {
-    localStorage.setItem("robobet_twitch_channel", state.twitch.login || name);
+  const storedChannel = (localStorage.getItem("robobet_twitch_channel") || "").trim().replace(/^@/, "");
+  if (!storedChannel || STALE_TWITCH_CHANNELS.has(storedChannel.toLowerCase())) {
+    localStorage.setItem("robobet_twitch_channel", DEFAULT_TWITCH_CHANNEL);
   }
   renderTwitchChat();
 }
@@ -1490,7 +1610,12 @@ function logoutTwitch() {
 }
 
 function getTwitchChannel() {
-  return (localStorage.getItem("robobet_twitch_channel") || DEFAULT_TWITCH_CHANNEL || "").trim().replace(/^@/, "");
+  const stored = (localStorage.getItem("robobet_twitch_channel") || "").trim().replace(/^@/, "");
+  if (!stored || STALE_TWITCH_CHANNELS.has(stored.toLowerCase())) {
+    localStorage.setItem("robobet_twitch_channel", DEFAULT_TWITCH_CHANNEL);
+    return DEFAULT_TWITCH_CHANNEL;
+  }
+  return stored;
 }
 
 function twitchParents() {
@@ -1586,10 +1711,12 @@ function bindEvents() {
   $("calibrateQtr").addEventListener("click", () => safeLoad("Calibrar QTR", calibrateQtr));
   $("enableObstacles").addEventListener("click", () => safeLoad("Activar obstaculos", () => setObstacleHandling(true)));
   $("disableObstacles").addEventListener("click", () => safeLoad("Quitar obstaculos", () => setObstacleHandling(false)));
-  $("obstacleGreen").addEventListener("click", () => safeLoad("Obstaculo verde", () => sendObstacleDecision("GREEN_SIGN")));
-  $("obstacleRed").addEventListener("click", () => safeLoad("Obstaculo rojo", () => sendObstacleDecision("RED_SIGN")));
-  $("obstacleBlack").addEventListener("click", () => safeLoad("Obstaculo negro", () => sendObstacleDecision("BLACK_SIGN")));
-  $("obstacleCameraAuto").addEventListener("click", () => safeLoad("Camara auto", setObstacleCameraAuto));
+  $("drivePowerSlider").addEventListener("input", (event) => {
+    const value = Number(event.target.value || 11);
+    setText("drivePowerValue", `${value}%`);
+    setText("drivePowerHint", `PWM base objetivo: ${value}%`);
+  });
+  $("drivePowerSlider").addEventListener("change", (event) => safeLoad("Potencia motores", () => setDrivePower(event.target.value)));
   $("enableTurnPause").addEventListener("click", () => safeLoad("Pausar cruces", () => setTurnPause(true)));
   $("disableTurnPause").addEventListener("click", () => safeLoad("Quitar pausa cruces", () => setTurnPause(false)));
   $("continueTurn").addEventListener("click", () => safeLoad("Continuar giro", continueTurn));
@@ -1601,7 +1728,8 @@ function bindEvents() {
   $("betKind").addEventListener("change", updateBetChoices);
   $("placeBet").addEventListener("click", () => safeLoad("Apostar", placeBet));
   $("loadPolls").addEventListener("click", () => safeLoad("Votaciones", loadPolls));
-  $("polls").addEventListener("click", (event) => safeLoad("Votacion", () => handlePollClick(event)));
+  $("adminLoadPolls").addEventListener("click", () => safeLoad("Votaciones", loadPolls));
+  $("adminPolls").addEventListener("click", (event) => safeLoad("Cerrar votacion", () => handlePollClick(event)));
   document.querySelectorAll("[data-poll-template]").forEach((button) => {
     button.addEventListener("click", () => safeLoad("Crear votacion", () => createPollFromTemplate(button.dataset.pollTemplate)));
   });

@@ -139,9 +139,38 @@ def _latest_open_poll(conn: Connection) -> dict | None:
     return dict(row) if row else None
 
 
+def _latest_open_poll_by_kind(conn: Connection, kind: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM polls WHERE status = 'open' AND lower(kind) = ? ORDER BY id DESC LIMIT 1",
+        (kind.lower(),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _open_poll_by_id(conn: Connection, poll_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM polls WHERE id = ? AND status = 'open'", (poll_id,)).fetchone()
     return dict(row) if row else None
+
+
+def _normalize_poll_target(raw_target: str) -> str | None:
+    value = raw_target.strip().lower().replace("-", "").replace("_", "")
+    return {
+        "algoritmo": "algorithm",
+        "algorithm": "algorithm",
+        "dfsbfs": "algorithm",
+        "obstaculo1": "obstacle_1",
+        "obstacle1": "obstacle_1",
+        "obs1": "obstacle_1",
+        "o1": "obstacle_1",
+        "obstaculo2": "obstacle_2",
+        "obstacle2": "obstacle_2",
+        "obs2": "obstacle_2",
+        "o2": "obstacle_2",
+        "obstaculo3": "obstacle_3",
+        "obstacle3": "obstacle_3",
+        "obs3": "obstacle_3",
+        "o3": "obstacle_3",
+    }.get(value)
 
 
 def _match_poll_option(raw_choice: str, options: list[str]) -> str | None:
@@ -262,12 +291,16 @@ def process_chat_message(
     elif command == "!voto":
         if len(parts) not in (2, 3):
             result["handled"] = True
-            result["reply"] = "uso: !voto <opcion> o !voto <poll_id> <opcion>"
+            result["reply"] = "uso: !voto <opcion>, !voto <poll_id> <opcion> o !voto <algoritmo|obstaculo1|obstaculo2|obstaculo3> <opcion>"
         else:
             poll: dict | None
             raw_choice: str
             if len(parts) == 3 and parts[1].isdigit():
                 poll = _open_poll_by_id(conn, int(parts[1]))
+                raw_choice = parts[2]
+            elif len(parts) == 3:
+                target_kind = _normalize_poll_target(parts[1])
+                poll = _latest_open_poll_by_kind(conn, target_kind) if target_kind else None
                 raw_choice = parts[2]
             else:
                 poll = _latest_open_poll(conn)

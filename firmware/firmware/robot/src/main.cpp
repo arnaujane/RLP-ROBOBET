@@ -343,6 +343,9 @@ String lastDebugMessage;
 
 void sendTelemetry();
 void followLine(const SensorFrame &frame);
+bool tryBridgeWhiteGap();
+bool searchForLineRecovery();
+void handleNode(const SensorFrame &frame);
 
 void debugLog(const String &message) {
   if (message == lastDebugMessage) {
@@ -737,6 +740,10 @@ uint8_t pwmPercent(int pwm) {
   return static_cast<uint8_t>((abs(constrain(pwm, -PWM_MAX, PWM_MAX)) * 100) / PWM_MAX);
 }
 
+uint8_t currentDrivePowerPercent() {
+  return pwmPercent(basePwm);
+}
+
 void addGraphDiagnostics(JsonDocument &doc) {
   JsonArray graphNodes = doc["graph_nodes"].to<JsonArray>();
   for (uint8_t i = 0; i < nodeCount; i++) {
@@ -819,6 +826,7 @@ void addLiveDiagnostics(JsonDocument &doc) {
   doc["motor_right_pwm"] = lastRightMotorPwm;
   doc["motor_left_percent"] = pwmPercent(lastLeftMotorPwm);
   doc["motor_right_percent"] = pwmPercent(lastRightMotorPwm);
+  doc["drive_power_percent"] = currentDrivePowerPercent();
   addGraphDiagnostics(doc);
 }
 
@@ -2571,6 +2579,18 @@ void applyCommand(const JsonDocument &doc) {
   } else if (strcmp(type, "SET_SPEED_LIMIT") == 0) {
     speedLimitPercent = constrain(doc["percent"] | 100, 1, 100);
     sendEvent("SPEED_LIMIT_SET");
+  } else if (strcmp(type, "SET_DRIVE_POWER") == 0) {
+    int requestedPercent = constrain(doc["percent"] | currentDrivePowerPercent(), 5, 100);
+    int requestedBase = constrain((requestedPercent * PWM_MAX) / 100, 0, PWM_MAX);
+    basePwm = requestedBase;
+    turnPwm = constrain((requestedBase * DEFAULT_TURN_PWM) / max(1, DEFAULT_BASE_PWM), 0, PWM_MAX);
+    searchTurnPwm = constrain((requestedBase * DEFAULT_SEARCH_TURN_PWM) / max(1, DEFAULT_BASE_PWM), 0, PWM_MAX);
+    JsonDocument extra;
+    extra["percent"] = currentDrivePowerPercent();
+    extra["base_pwm"] = basePwm;
+    extra["turn_pwm"] = turnPwm;
+    extra["search_turn_pwm"] = searchTurnPwm;
+    sendEvent("DRIVE_POWER_SET", &extra);
   } else if (strcmp(type, "SET_TURN_PAUSE") == 0) {
     pauseBeforeTurnEnabled = doc["enabled"] | true;
     JsonDocument extra;
@@ -2784,206 +2804,12 @@ void resetDefaults() {
 }
 
 String buildControlPage() {
-  String html;
-
-  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>RLP Line Tuning</title>";
-  html += "<style>";
-  html += "body{font-family:Arial,sans-serif;background:#f6f1e8;color:#1f1f1f;padding:20px;}";
-  html += ".card{background:#fff;border-radius:14px;padding:16px;margin-bottom:16px;box-shadow:0 8px 24px rgba(0,0,0,.08);}";
-  html += "label{display:block;font-weight:700;margin-bottom:6px;}pre{white-space:pre-wrap;}";
-  html += ".row{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:14px;}";
-  html += ".control{display:grid;grid-template-columns:52px 1fr 52px;gap:10px;align-items:center;}";
-  html += ".valueInput{width:100%;padding:10px;border:1px solid #ccc;border-radius:10px;font-size:16px;box-sizing:border-box;}";
-  html += "button{border:0;border-radius:10px;padding:10px 14px;background:#1b6ef3;color:#fff;font-weight:700;}";
-  html += ".stepBtn{font-size:22px;line-height:1;padding:10px 0;}";
-  html += "</style></head><body>";
-  html += "<div class='card'><h2>RLP ROBOBET</h2><p>Tuning local del seguidor de linea.</p></div>";
-  html += "<div class='card'>";
-  html += "<div class='row'><label>Velocidad base</label><span id='basePwmValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='basePwm' data-step='-1'>-</button><input class='valueInput' id='basePwm' type='number' min='28' max='120' step='1' value='" + String(basePwm) + "'><button class='stepBtn' data-target='basePwm' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Velocidad giro</label><span id='turnPwmValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='turnPwm' data-step='-1'>-</button><input class='valueInput' id='turnPwm' type='number' min='35' max='120' step='1' value='" + String(turnPwm) + "'><button class='stepBtn' data-target='turnPwm' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Velocidad busqueda giro</label><span id='searchTurnPwmValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='searchTurnPwm' data-step='-1'>-</button><input class='valueInput' id='searchTurnPwm' type='number' min='35' max='120' step='1' value='" + String(searchTurnPwm) + "'><button class='stepBtn' data-target='searchTurnPwm' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Velocidad busqueda avance</label><span id='searchForwardPwmValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='searchForwardPwm' data-step='-1'>-</button><input class='valueInput' id='searchForwardPwm' type='number' min='0' max='80' step='1' value='" + String(searchForwardPwm) + "'><button class='stepBtn' data-target='searchForwardPwm' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Timeout busqueda (ms)</label><span id='searchTimeoutMsValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='searchTimeoutMs' data-step='-50'>-</button><input class='valueInput' id='searchTimeoutMs' type='number' min='100' max='3000' step='50' value='" + String(searchTimeoutMs) + "'><button class='stepBtn' data-target='searchTimeoutMs' data-step='50'>+</button></div>";
-  html += "<div class='row'><label>Ventana posicion</label><span id='positionWindowValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='positionWindow' data-step='-1'>-</button><input class='valueInput' id='positionWindow' type='number' min='0' max='4' step='1' value='" + String(positionWindow) + "'><button class='stepBtn' data-target='positionWindow' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Ganancia posicion</label><span id='positionGainValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='positionGain' data-step='-1'>-</button><input class='valueInput' id='positionGain' type='number' min='1' max='60' step='1' value='" + String(positionGain) + "'><button class='stepBtn' data-target='positionGain' data-step='1'>+</button></div>";
-  html += "<div class='row'><label>Umbral negro objetivo</label><span id='targetLineThresholdRawValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='targetLineThresholdRaw' data-step='-10'>-</button><input class='valueInput' id='targetLineThresholdRaw' type='number' min='1200' max='2800' step='10' value='" + String(targetLineThresholdRaw) + "'><button class='stepBtn' data-target='targetLineThresholdRaw' data-step='10'>+</button></div>";
-  html += "<div class='row'><label>Umbral minimo adaptativo</label><span id='minAdaptiveThresholdRawValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='minAdaptiveThresholdRaw' data-step='-10'>-</button><input class='valueInput' id='minAdaptiveThresholdRaw' type='number' min='1200' max='2800' step='10' value='" + String(minAdaptiveThresholdRaw) + "'><button class='stepBtn' data-target='minAdaptiveThresholdRaw' data-step='10'>+</button></div>";
-  html += "<div class='row'><label>Paso adaptativo</label><span id='thresholdStepRawValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='thresholdStepRaw' data-step='-5'>-</button><input class='valueInput' id='thresholdStepRaw' type='number' min='5' max='100' step='5' value='" + String(thresholdStepRaw) + "'><button class='stepBtn' data-target='thresholdStepRaw' data-step='5'>+</button></div>";
-  html += "<div class='row'><label>Delay loop (ms)</label><span id='loopDelayMsValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='loopDelayMs' data-step='-5'>-</button><input class='valueInput' id='loopDelayMs' type='number' min='20' max='300' step='5' value='" + String(loopDelayMs) + "'><button class='stepBtn' data-target='loopDelayMs' data-step='5'>+</button></div>";
-  html += "<div class='row'><label>Avance ms/cm</label><span id='msPerCmValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='msPerCm' data-step='-5'>-</button><input class='valueInput' id='msPerCm' type='number' min='10' max='250' step='5' value='" + String(msPerCm) + "'><button class='stepBtn' data-target='msPerCm' data-step='5'>+</button></div>";
-  html += "<div class='row'><label>Giro 90 grados (ms)</label><span id='msTurn90Value'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='msTurn90' data-step='-20'>-</button><input class='valueInput' id='msTurn90' type='number' min='200' max='2000' step='20' value='" + String(msTurn90) + "'><button class='stepBtn' data-target='msTurn90' data-step='20'>+</button></div>";
-  html += "<div class='row'><label>Giro 180 grados (ms)</label><span id='msTurn180Value'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='msTurn180' data-step='-20'>-</button><input class='valueInput' id='msTurn180' type='number' min='400' max='3500' step='20' value='" + String(msTurn180) + "'><button class='stepBtn' data-target='msTurn180' data-step='20'>+</button></div>";
-  html += "<div class='row'><label>Reacople linea giro (ms)</label><span id='lineReacquireMsValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='lineReacquireMs' data-step='-20'>-</button><input class='valueInput' id='lineReacquireMs' type='number' min='100' max='2500' step='20' value='" + String(lineReacquireMs) + "'><button class='stepBtn' data-target='lineReacquireMs' data-step='20'>+</button></div>";
-  html += "<div class='row'><label>Margen extra media vuelta (ms)</label><span id='backTurnExtraMsValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='backTurnExtraMs' data-step='-50'>-</button><input class='valueInput' id='backTurnExtraMs' type='number' min='0' max='3000' step='50' value='" + String(backTurnExtraMs) + "'><button class='stepBtn' data-target='backTurnExtraMs' data-step='50'>+</button></div>";
-  html += "<div class='row'><label>Limite velocidad (%)</label><span id='speedLimitPercentValue'></span></div>";
-  html += "<div class='control'><button class='stepBtn' data-target='speedLimitPercent' data-step='-5'>-</button><input class='valueInput' id='speedLimitPercent' type='number' min='1' max='100' step='1' value='" + String(speedLimitPercent) + "'><button class='stepBtn' data-target='speedLimitPercent' data-step='5'>+</button></div>";
-  html += "<div class='row'><label>Motores locales</label><span id='localMotorsEnabledValue'></span></div>";
-  html += "<button id='toggleMotors' type='button'></button>";
-  html += "<div class='row'><label>Gestion de obstaculos</label><span id='obstacleHandlingEnabledValue'></span></div>";
-  html += "<button id='toggleObstacles' type='button' style='background:#7a5c00;'></button>";
-  html += "<div style='margin-top:14px;'><button id='resetDefaults' type='button' style='background:#444;'>Reset to defaults</button></div>";
-  html += "</div>";
-  html += "<div class='card'><strong>Sensores</strong><pre id='sensorValues'></pre><strong>Mapa</strong><pre id='lineMap'></pre></div>";
-  html += "<script>";
-  html += "const ids=['basePwm','turnPwm','searchTurnPwm','searchForwardPwm','searchTimeoutMs','positionWindow','positionGain','targetLineThresholdRaw','minAdaptiveThresholdRaw','thresholdStepRaw','loopDelayMs','msPerCm','msTurn90','msTurn180','lineReacquireMs','backTurnExtraMs','speedLimitPercent'];";
-  html += "function clampValue(el){const min=Number(el.min);const max=Number(el.max);let value=Number(el.value);if(Number.isNaN(value))value=min;if(value<min)value=min;if(value>max)value=max;el.value=value;}";
-  html += "function syncLabels(){ids.forEach(id=>document.getElementById(id+'Value').textContent=document.getElementById(id).value);}";
-  html += "async function push(){const p=new URLSearchParams();ids.forEach(id=>{const el=document.getElementById(id);clampValue(el);p.set(id,el.value);});p.set('localMotorsEnabled',window.localMotorsEnabled?'1':'0');await fetch('/set?'+p.toString());syncLabels();refresh();}";
-  html += "async function pushAll(){const p=new URLSearchParams();ids.forEach(id=>{const el=document.getElementById(id);clampValue(el);p.set(id,el.value);});p.set('localMotorsEnabled',window.localMotorsEnabled?'1':'0');p.set('obstacleHandlingEnabled',window.obstacleHandlingEnabled?'1':'0');await fetch('/set?'+p.toString());syncLabels();refresh();}";
-  html += "async function refresh(){const r=await fetch('/status');const s=await r.json();window.localMotorsEnabled=!!s.localMotorsEnabled;";
-  html += "window.obstacleHandlingEnabled=!!s.obstacleHandlingEnabled;";
-  html += "ids.forEach(id=>document.getElementById(id).value=s[id]);";
-  html += "document.getElementById('sensorValues').textContent=s.sensorValues;";
-  html += "document.getElementById('lineMap').textContent=s.lineMap + '\\nUmbral actual: ' + s.currentLineThresholdRaw + ' / objetivo: ' + s.targetLineThresholdRaw + '\\nCamara: ' + s.cameraSign + ' (' + s.cameraConfidence + '% ' + s.cameraReason + ')' + '\\nOrientacion: ' + s.orientation + '\\nNodo actual: ' + s.currentNode + '  Nodos: ' + s.nodeCount + '  Aristas: ' + s.edgeCount + '\\nCruce: ' + s.lastIntersectionType + '  Salidas: ' + s.relativeExits + '\\nProteccion PID: ' + (s.lineTrackingProtected ? 'SI' : 'NO') + '\\nMemoria direccion: ' + s.lastKnownDirection + '\\nPosicion: ' + s.lastKnownPosition + '\\nBuscando: ' + (s.isSearching ? 'SI' : 'NO') + '\\nRun activo: ' + (s.runActive ? 'SI' : 'NO');";
-  html += "document.getElementById('localMotorsEnabledValue').textContent=window.localMotorsEnabled?'ON':'OFF';";
-  html += "document.getElementById('toggleMotors').textContent=window.localMotorsEnabled?'Desactivar motores':'Activar motores';";
-  html += "document.getElementById('obstacleHandlingEnabledValue').textContent=window.obstacleHandlingEnabled?'ON':'OFF';";
-  html += "document.getElementById('toggleObstacles').textContent=window.obstacleHandlingEnabled?'Desactivar obstaculos':'Activar obstaculos';syncLabels();}";
-  html += "ids.forEach(id=>{const el=document.getElementById(id);el.addEventListener('change',push);el.addEventListener('blur',push);});";
-  html += "document.querySelectorAll('.stepBtn').forEach(btn=>btn.addEventListener('click',async()=>{const el=document.getElementById(btn.dataset.target);const step=Number(btn.dataset.step);const base=Number(el.value||el.min||0);el.value=base+step;clampValue(el);await push();}));";
-  html += "document.getElementById('toggleMotors').addEventListener('click',async()=>{window.localMotorsEnabled=!window.localMotorsEnabled;await push();});";
-  html += "document.getElementById('toggleObstacles').addEventListener('click',async()=>{window.obstacleHandlingEnabled=!window.obstacleHandlingEnabled;await pushAll();});";
-  html += "document.getElementById('resetDefaults').addEventListener('click',async()=>{await fetch('/reset');await refresh();});";
-  html += "window.localMotorsEnabled=false;window.obstacleHandlingEnabled=false;refresh();setInterval(refresh,500);";
-  html += "</script></body></html>";
-
-  return html;
+  return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>RoboBet AP</title><style>html,body{margin:0;height:100%;background:#ffffff;}</style></head><body></body></html>";
 }
 
 void handleRoot() {
+  localServer.sendHeader("Cache-Control", "no-store");
   localServer.send(200, "text/html", buildControlPage());
-}
-
-void handleSet() {
-  if (localServer.hasArg("basePwm")) {
-    basePwm = constrain(localServer.arg("basePwm").toInt(), DEFAULT_BASE_PWM, 255);
-  }
-  if (localServer.hasArg("turnPwm")) {
-    turnPwm = constrain(localServer.arg("turnPwm").toInt(), DEFAULT_TURN_PWM, 255);
-  }
-  if (localServer.hasArg("searchTurnPwm")) {
-    searchTurnPwm = constrain(localServer.arg("searchTurnPwm").toInt(), DEFAULT_SEARCH_TURN_PWM, 255);
-  }
-  if (localServer.hasArg("searchForwardPwm")) {
-    searchForwardPwm = constrain(localServer.arg("searchForwardPwm").toInt(), 0, 255);
-  }
-  if (localServer.hasArg("searchTimeoutMs")) {
-    searchTimeoutMs = constrain(localServer.arg("searchTimeoutMs").toInt(), 50, 10000);
-  }
-  if (localServer.hasArg("positionWindow")) {
-    positionWindow = constrain(localServer.arg("positionWindow").toInt(), 0, QTR_COUNT / 2);
-  }
-  if (localServer.hasArg("positionGain")) {
-    positionGain = constrain(localServer.arg("positionGain").toInt(), 1, 60);
-  }
-  if (localServer.hasArg("targetLineThresholdRaw")) {
-    targetLineThresholdRaw = constrain(localServer.arg("targetLineThresholdRaw").toInt(), 0, QTR_TIMEOUT_US);
-    currentLineThresholdRaw = min(currentLineThresholdRaw, targetLineThresholdRaw);
-  }
-  if (localServer.hasArg("minAdaptiveThresholdRaw")) {
-    minAdaptiveThresholdRaw = constrain(localServer.arg("minAdaptiveThresholdRaw").toInt(), 0, QTR_TIMEOUT_US);
-    currentLineThresholdRaw = constrain(currentLineThresholdRaw, minAdaptiveThresholdRaw, targetLineThresholdRaw);
-  }
-  if (localServer.hasArg("thresholdStepRaw")) {
-    thresholdStepRaw = constrain(localServer.arg("thresholdStepRaw").toInt(), 1, 200);
-  }
-  if (localServer.hasArg("loopDelayMs")) {
-    loopDelayMs = constrain(localServer.arg("loopDelayMs").toInt(), 20, 1000);
-  }
-  if (localServer.hasArg("msPerCm")) {
-    msPerCm = constrain(localServer.arg("msPerCm").toInt(), 10, 250);
-  }
-  if (localServer.hasArg("msTurn90")) {
-    msTurn90 = constrain(localServer.arg("msTurn90").toInt(), 200, 2000);
-  }
-  if (localServer.hasArg("msTurn180")) {
-    msTurn180 = constrain(localServer.arg("msTurn180").toInt(), 400, 3500);
-  }
-  if (localServer.hasArg("lineReacquireMs")) {
-    lineReacquireMs = constrain(localServer.arg("lineReacquireMs").toInt(), 100, 2500);
-  }
-  if (localServer.hasArg("backTurnExtraMs")) {
-    backTurnExtraMs = constrain(localServer.arg("backTurnExtraMs").toInt(), 0, 3000);
-  }
-  if (localServer.hasArg("speedLimitPercent")) {
-    speedLimitPercent = constrain(localServer.arg("speedLimitPercent").toInt(), 1, 100);
-  }
-  if (localServer.hasArg("localMotorsEnabled")) {
-    localMotorsEnabled = localServer.arg("localMotorsEnabled").toInt() != 0;
-    if (!localMotorsEnabled && !runActive) {
-      stopMotors();
-    }
-  }
-  if (localServer.hasArg("obstacleHandlingEnabled")) {
-    obstacleHandlingEnabled = localServer.arg("obstacleHandlingEnabled").toInt() != 0;
-  }
-
-  localServer.send(200, "text/plain", "ok");
-}
-
-void handleReset() {
-  resetDefaults();
-  localServer.send(200, "text/plain", "ok");
-}
-
-void handleStatus() {
-  String json = "{";
-  json += "\"basePwm\":" + String(basePwm) + ",";
-  json += "\"turnPwm\":" + String(turnPwm) + ",";
-  json += "\"searchTurnPwm\":" + String(searchTurnPwm) + ",";
-  json += "\"searchForwardPwm\":" + String(searchForwardPwm) + ",";
-  json += "\"searchTimeoutMs\":" + String(searchTimeoutMs) + ",";
-  json += "\"positionWindow\":" + String(positionWindow) + ",";
-  json += "\"positionGain\":" + String(positionGain) + ",";
-  json += "\"targetLineThresholdRaw\":" + String(targetLineThresholdRaw) + ",";
-  json += "\"currentLineThresholdRaw\":" + String(currentLineThresholdRaw) + ",";
-  json += "\"minAdaptiveThresholdRaw\":" + String(minAdaptiveThresholdRaw) + ",";
-  json += "\"thresholdStepRaw\":" + String(thresholdStepRaw) + ",";
-  json += "\"loopDelayMs\":" + String(loopDelayMs) + ",";
-  json += "\"msPerCm\":" + String(msPerCm) + ",";
-  json += "\"msTurn90\":" + String(msTurn90) + ",";
-  json += "\"msTurn180\":" + String(msTurn180) + ",";
-  json += "\"lineReacquireMs\":" + String(lineReacquireMs) + ",";
-  json += "\"backTurnExtraMs\":" + String(backTurnExtraMs) + ",";
-  json += "\"speedLimitPercent\":" + String(speedLimitPercent) + ",";
-  json += "\"orientation\":\"" + String(orientationName(robotOrientation)) + "\",";
-  json += "\"lastIntersectionType\":\"" + String(intersectionTypeName(lastIntersectionType)) + "\",";
-  json += "\"relativeExits\":\"" + relativeExitMaskText(lastAvailableExits) + "\",";
-  json += "\"lineTrackingProtected\":" + String(lastLineTrackingProtected ? 1 : 0) + ",";
-  json += "\"currentNode\":" + String(currentNode) + ",";
-  json += "\"nodeCount\":" + String(nodeCount) + ",";
-  json += "\"edgeCount\":" + String(edgeCount) + ",";
-  json += "\"obstacleHandlingEnabled\":" + String(obstacleHandlingEnabled ? 1 : 0) + ",";
-  json += "\"localMotorsEnabled\":" + String(localMotorsEnabled ? 1 : 0) + ",";
-  json += "\"runActive\":" + String(runActive ? 1 : 0) + ",";
-  json += "\"lastKnownDirection\":" + String(lastKnownDirection) + ",";
-  json += "\"lastKnownPosition\":" + String(lastKnownPosition, 2) + ",";
-  json += "\"isSearching\":" + String(isSearching ? 1 : 0) + ",";
-  json += "\"cameraSign\":\"" + String(cameraSignName(lastCameraSign)) + "\",";
-  json += "\"cameraConfidence\":" + String(lastCameraConfidence) + ",";
-  json += "\"cameraReason\":\"" + lastCameraReason + "\",";
-  json += "\"sensorValues\":\"" + buildSensorValues() + "\",";
-  json += "\"lineMap\":\"" + buildLineMap() + "\"";
-  json += "}";
-
-  localServer.send(200, "application/json", json);
 }
 
 void handleQtrDebug() {
@@ -3070,9 +2896,6 @@ void setupWebSocket() {
 
 void setupLocalUi() {
   localServer.on("/", handleRoot);
-  localServer.on("/set", handleSet);
-  localServer.on("/reset", handleReset);
-  localServer.on("/status", handleStatus);
   localServer.on("/qtr-debug", handleQtrDebug);
   localServer.begin();
 }
@@ -3168,7 +2991,7 @@ void loop() {
   updateAdaptiveThreshold(frame);
   updateLineMemory(frame);
 
-  if (frame.blackPatch && obstacleHandlingEnabled && !returningFromBlockedObstacle) {
+  if (frame.blackPatch && runActive && !returningFromBlockedObstacle) {
     if (currentTraversalIsKnownGreen()) {
       debugLog("[STATE] Obstaculo verde conocido, pasando recto");
       bool cleared = drivePastBlackPatch();

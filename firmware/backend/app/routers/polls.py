@@ -50,6 +50,12 @@ async def create_poll(payload: PollCreate) -> dict:
     if len(options) < 2:
         raise HTTPException(400, "A poll needs at least two options")
     with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM polls WHERE status = 'open' AND lower(kind) = ? ORDER BY id DESC LIMIT 1",
+            (payload.kind.strip().lower(),),
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, f"There is already an open poll for {payload.kind}")
         cur = conn.execute(
             "INSERT INTO polls(kind, title, options) VALUES (?, ?, ?)",
             (payload.kind, payload.title, json.dumps(options)),
