@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="./styles.css?v=20260613-5" />
   </head>
   <body>
-    <!-- Cabecera fija: marca, vistas y estado de conexiones. -->
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">RB</div>
@@ -40,7 +39,6 @@
     </header>
 
     <main class="app-shell">
-      <!-- Vista tecnica para operar robot, sensores, grafo y camaras. -->
       <section id="adminScreen" class="screen active" aria-labelledby="adminTitle">
         <div class="screen-head">
           <div>
@@ -123,7 +121,6 @@
           </article>
         </section>
 
-        <!-- Sensores QTR y grafo comparten la parte alta para depurar cruces. -->
         <section class="admin-sensors">
           <article class="panel sensor-panel top-sensor-panel">
             <div class="panel-head">
@@ -160,7 +157,6 @@
           </article>
         </section>
 
-        <!-- Streams de camara separados: robot en primera persona y camara cenital. -->
         <section class="camera-grid">
           <article class="panel video-panel wide">
             <div class="panel-head">
@@ -191,7 +187,6 @@
           </article>
         </section>
 
-        <!-- Paneles de estado, usuario, apuestas y votaciones del operador. -->
         <section class="admin-grid">
           <article class="panel camera-detect-panel">
             <div class="panel-head">
@@ -273,7 +268,6 @@
           </article>
         </section>
 
-        <!-- Votaciones, chat y eventos para controlar la demo en directo. -->
         <section class="broadcast-grid">
           <article class="panel poll-panel admin-poll-panel">
             <div class="panel-head">
@@ -322,7 +316,6 @@
         </section>
       </section>
 
-      <!-- Vista publica: pensada para usuarios y directo de Twitch. -->
       <section id="userScreen" class="screen" aria-labelledby="userTitle">
         <div class="screen-head">
           <div>
@@ -340,7 +333,6 @@
           </article>
         </div>
 
-        <!-- Camaras principales que ve el publico. -->
         <section class="viewer-grid">
           <article class="panel video-panel viewer-main">
             <div class="panel-head">
@@ -363,7 +355,6 @@
           </article>
         </section>
 
-        <!-- Participacion del usuario: cuenta, apuestas, votos y chat. -->
         <section class="viewer-status">
           <article class="panel live-card">
             <h3>Directo del laberinto</h3>
@@ -438,7 +429,6 @@
           </article>
         </section>
 
-        <!-- Historial de partidas para comparar tiempos y restricciones. -->
         <section class="panel history-panel">
           <div class="panel-head">
             <h3>Ultimos laberintos</h3>
