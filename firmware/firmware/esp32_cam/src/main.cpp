@@ -152,6 +152,7 @@ struct FrameDimensions {
   uint16_t height;
 };
 
+// El perfil cambia resolucion, calidad y buffers sin tocar el resto del codigo.
 CameraProfileConfig selectedCameraProfile() {
 #if CAMERA_PROFILE == CAMERA_PROFILE_BALANCED
   return {"EQUILIBRADO", FRAMESIZE_VGA, 12, 20000000, 2, 1, CAMERA_GRAB_LATEST, CAMERA_GRAB_WHEN_EMPTY, 35, 7000};
@@ -162,6 +163,7 @@ CameraProfileConfig selectedCameraProfile() {
 #endif
 }
 
+// Dimensiones usadas en /status cuando aun no hay un frame reciente.
 FrameDimensions dimensionsForFrameSize(framesize_t frameSize) {
   switch (frameSize) {
     case FRAMESIZE_QQVGA: return {160, 120};
@@ -173,6 +175,7 @@ FrameDimensions dimensionsForFrameSize(framesize_t frameSize) {
   }
 }
 
+// Nombre legible para diagnostico web.
 const char *frameSizeName(framesize_t frameSize) {
   switch (frameSize) {
     case FRAMESIZE_QQVGA: return "QQVGA";
@@ -184,6 +187,7 @@ const char *frameSizeName(framesize_t frameSize) {
   }
 }
 
+// Muestra si se prioriza baja latencia o estabilidad de buffer.
 const char *grabModeName(camera_grab_mode_t grabMode) {
   return grabMode == CAMERA_GRAB_LATEST ? "latest" : "when_empty";
 }
@@ -245,6 +249,7 @@ struct DetectionResult {
   ColorStats stats;
 };
 
+// En modo serie informa solo el signo, para que el robot lo pueda leer facil.
 void reportSign(bool force = false) {
 #if CAMERA_SERIAL_REPORTS
   if (!force && millis() - lastSignReportMs < SIGN_REPORT_INTERVAL_MS) {
@@ -257,6 +262,7 @@ void reportSign(bool force = false) {
 #endif
 }
 
+// Clasifica un pixel como rojo, verde o negro si tiene suficiente separacion.
 void accumulateColorStats(ColorStats &stats, uint8_t r, uint8_t g, uint8_t b) {
   uint8_t maxChannel = max(r, max(g, b));
   uint8_t minChannel = min(r, min(g, b));
@@ -291,6 +297,7 @@ void accumulateColorStats(ColorStats &stats, uint8_t r, uint8_t g, uint8_t b) {
   stats.sampled++;
 }
 
+// Recorre solo la zona central de la imagen para evitar bordes y fondo.
 ColorStats analyzeRgbPixelStream(const uint8_t *pixels, uint16_t width, uint16_t height, uint8_t bytesPerPixel) {
   ColorStats stats;
   if (!pixels || width == 0 || height == 0 || bytesPerPixel == 0) {
@@ -314,6 +321,7 @@ ColorStats analyzeRgbPixelStream(const uint8_t *pixels, uint16_t width, uint16_t
   return stats;
 }
 
+// Analisis directo si algun perfil usa RGB565.
 ColorStats analyzeRgb565Frame(camera_fb_t *fb) {
   ColorStats stats;
   if (!fb || fb->format != PIXFORMAT_RGB565) {
@@ -343,6 +351,7 @@ ColorStats analyzeRgb565Frame(camera_fb_t *fb) {
   return stats;
 }
 
+// Decodifica JPEG a RGB para poder votar colores.
 ColorStats analyzeJpegFrame(camera_fb_t *fb) {
   ColorStats stats;
   if (!fb || fb->format != PIXFORMAT_JPEG || fb->width == 0 || fb->height == 0) {
@@ -366,6 +375,7 @@ ColorStats analyzeJpegFrame(camera_fb_t *fb) {
   return stats;
 }
 
+// Elige el analizador segun el formato real del frame.
 ColorStats analyzeFrame(camera_fb_t *fb) {
   if (!fb) {
     return {};
@@ -393,10 +403,12 @@ uint8_t confidenceFromPercent(uint8_t percent, uint8_t minimumPercent) {
   return static_cast<uint8_t>(constrain(map(percent, minimumPercent, 25, 45, 100), 0, 100));
 }
 
+// Margen contra falsos positivos cuando rojo y verde aparecen mezclados.
 bool dominates(uint32_t value, uint32_t other) {
   return value * 100 > other * (100 + DOMINANCE_MARGIN_PERCENT);
 }
 
+// Decide una senal a partir de porcentajes y dominancia de color.
 DetectionResult classifySign(const ColorStats &stats) {
   DetectionResult result;
   result.stats = stats;
@@ -446,6 +458,7 @@ DetectionResult classifySign(const ColorStats &stats) {
   return result;
 }
 
+// Actualiza el ultimo resultado que vera /status y el robot.
 String updateSign(camera_fb_t *fb) {
   ColorStats stats = analyzeFrame(fb);
   lastRedPixels = stats.red;
@@ -468,6 +481,7 @@ String updateSign(camera_fb_t *fb) {
   return detected;
 }
 
+// Tamano minimo esperado para un frame RGB565 coherente.
 size_t expectedRgb565Length(const camera_fb_t *fb) {
   if (!fb) {
     return 0;
@@ -475,6 +489,7 @@ size_t expectedRgb565Length(const camera_fb_t *fb) {
   return static_cast<size_t>(fb->width) * static_cast<size_t>(fb->height) * 2;
 }
 
+// Los JPEG corruptos suelen perder marcadores de inicio o final.
 bool jpegHasStartMarker(const camera_fb_t *fb) {
   return fb && fb->len >= 2 && fb->buf[0] == 0xFF && fb->buf[1] == 0xD8;
 }
@@ -492,6 +507,7 @@ bool jpegHasEndMarker(const camera_fb_t *fb) {
   return false;
 }
 
+// Filtro rapido para no publicar ni analizar frames incompletos.
 bool frameLooksValid(const camera_fb_t *fb) {
   if (!fb || !fb->buf || fb->len == 0 || fb->width == 0 || fb->height == 0) {
     return false;
@@ -505,6 +521,7 @@ bool frameLooksValid(const camera_fb_t *fb) {
   return false;
 }
 
+// Cuenta fallos para poder detectar una camara inestable.
 void recordCaptureFailure(bool corrupt = false) {
   captureFailures++;
   consecutiveCaptureFailures++;
@@ -514,12 +531,14 @@ void recordCaptureFailure(bool corrupt = false) {
   }
 }
 
+// Una captura valida reinicia el contador de recuperacion.
 void recordCaptureOk() {
   consecutiveCaptureFailures = 0;
   lastCaptureOkMs = millis();
   cameraHealth = "ok";
 }
 
+// Calcula FPS en ventanas cortas, suficiente para diagnostico.
 void updateFps() {
   frameCounter++;
   uint32_t now = millis();
@@ -533,6 +552,7 @@ void updateFps() {
 
 bool setupCamera();
 
+// Reinicia el driver si hay demasiados frames malos seguidos.
 void recoverCameraIfNeeded() {
   if (consecutiveCaptureFailures < MAX_CONSECUTIVE_CAPTURE_FAILURES) {
     return;
@@ -549,6 +569,7 @@ void recoverCameraIfNeeded() {
   cameraReady = setupCamera();
 }
 
+// Captura un frame y lo descarta si parece incompleto.
 camera_fb_t *captureValidFrame() {
   if (!cameraReady) {
     recordCaptureFailure();
@@ -582,6 +603,7 @@ camera_fb_t *captureValidFrame() {
   return fb;
 }
 
+// Captura, analiza y actualiza el signo visible por API.
 bool captureAndUpdateSign(String *detected = nullptr) {
   camera_fb_t *fb = captureValidFrame();
   if (!fb) {
@@ -598,6 +620,7 @@ bool captureAndUpdateSign(String *detected = nullptr) {
   return true;
 }
 
+// Quita un frame viejo antes de una deteccion manual.
 void discardStaleFrame() {
   if (!cameraReady) {
     return;
@@ -608,6 +631,7 @@ void discardStaleFrame() {
   }
 }
 
+// Mayoria simple: evita decidir por una sola imagen mala.
 String chooseSignFromVotes(uint8_t redVotes, uint8_t greenVotes, uint8_t blackVotes, uint8_t noSignVotes) {
   const uint8_t requiredVotes = max<uint8_t>(2, (DETECT_SAMPLE_COUNT / 2) + 1);
   if (blackVotes >= requiredVotes && blackVotes > redVotes && blackVotes > greenVotes && blackVotes > noSignVotes) {
@@ -622,6 +646,7 @@ String chooseSignFromVotes(uint8_t redVotes, uint8_t greenVotes, uint8_t blackVo
   return "NO_SIGN";
 }
 
+// Toma varias muestras para estabilizar rojo, verde y negro.
 String detectSignFromSamples() {
   uint8_t redVotes = 0;
   uint8_t greenVotes = 0;
@@ -674,6 +699,7 @@ String detectSignFromSamples() {
   return lastSign;
 }
 
+// Campos comunes que consumen la web y el robot.
 void addDetectionFields(JsonDocument &doc) {
   doc["sign"] = lastSign;
   doc["confidence"] = lastConfidence;
@@ -697,12 +723,14 @@ void addDetectionFields(JsonDocument &doc) {
   roi["bottom_percent"] = ROI_BOTTOM_PERCENT;
 }
 
+// JSON con CORS para que el frontend pueda leer la camara directamente.
 void sendJsonResponse(const String &body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", body);
 }
 
+// Ajustes OV2640 pensados para movimiento y poca luz.
 void configureCameraSensor(sensor_t *sensor) {
   if (!sensor) {
     return;
@@ -735,6 +763,7 @@ void configureCameraSensor(sensor_t *sensor) {
   sensor->set_vflip(sensor, CAMERA_SENSOR_VFLIP);
 }
 
+// Inicializa la camara con PSRAM si existe y deja el perfil activo.
 bool setupCamera() {
   cameraReady = false;
   cameraProfile = selectedCameraProfile();
@@ -783,6 +812,7 @@ bool setupCamera() {
   return true;
 }
 
+// Estado completo de salud, deteccion y stream.
 void handleStatus() {
   JsonDocument doc;
   FrameDimensions dims = dimensionsForFrameSize(cameraProfile.frameSize);
@@ -823,6 +853,7 @@ void handleStatus() {
   sendJsonResponse(body);
 }
 
+// Pagina minima de pruebas cuando se abre la IP de la camara.
 void handleRoot() {
   String streamUrl = "http://" + WiFi.localIP().toString() + ":" + String(CAMERA_STREAM_PORT) + "/stream";
   String html = "<html><body><h1>RoboBet ESP32-CAM</h1><p>MJPEG stream: <a href='";
@@ -833,6 +864,7 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
+// Endpoint usado por robot/backend para decidir obstaculos.
 void handleDetect() {
   if (!cameraReady) {
     JsonDocument doc;
@@ -857,6 +889,7 @@ void handleDetect() {
   sendJsonResponse(body);
 }
 
+// Escribe JPEG sin convertir para mantener baja latencia.
 bool writeJpegPayload(WiFiClient &client, camera_fb_t *fb) {
   if (!client.connected() || !fb || fb->format != PIXFORMAT_JPEG) {
     return false;
@@ -865,6 +898,7 @@ bool writeJpegPayload(WiFiClient &client, camera_fb_t *fb) {
   return written == fb->len;
 }
 
+// Un frame dentro del multipart MJPEG.
 bool writeMultipartFrame(WiFiClient &client) {
   camera_fb_t *fb = captureValidFrame();
   if (!fb) {
@@ -884,6 +918,7 @@ bool writeMultipartFrame(WiFiClient &client) {
   return ok;
 }
 
+// Foto puntual, util como fallback si MJPEG falla.
 void handleSnapshot() {
   WiFiClient client = server.client();
   camera_fb_t *fb = captureValidFrame();
@@ -903,6 +938,7 @@ void handleSnapshot() {
   updateFps();
 }
 
+// Stream MJPEG sencillo desde el WebServer principal.
 void handleStream() {
   WiFiClient client = server.client();
   uint32_t streamStartMs = millis();
@@ -926,6 +962,7 @@ void handleStream() {
   }
 }
 
+// Cierra el cliente dedicado si se corta o hay reconexion.
 void stopDedicatedStreamClient() {
   if (hasActiveStreamClient) {
     activeStreamClient.stop();
@@ -933,6 +970,7 @@ void stopDedicatedStreamClient() {
   }
 }
 
+// Consume cabeceras HTTP antes de empezar a enviar frames.
 void drainStreamHttpRequest(WiFiClient &client) {
   client.setTimeout(180);
   uint32_t deadline = millis() + 260;
@@ -949,6 +987,7 @@ void drainStreamHttpRequest(WiFiClient &client) {
   }
 }
 
+// Solo dejamos un stream dedicado para no saturar la ESP32-CAM.
 void acceptDedicatedStreamClient() {
   WiFiClient candidate = streamServer.available();
   if (!candidate) {
@@ -975,6 +1014,7 @@ void acceptDedicatedStreamClient() {
   nextStreamFrameMs = 0;
 }
 
+// Stream no bloqueante en puerto 81 para que /status y /detect sigan vivos.
 void handleDedicatedStreamServer() {
   if (hasActiveStreamClient && !activeStreamClient.connected()) {
     stopDedicatedStreamClient();
@@ -995,6 +1035,7 @@ void handleDedicatedStreamServer() {
   nextStreamFrameMs = millis() + (ok ? cameraProfile.streamDelayMs : 35);
 }
 
+// IP fija opcional para que el robot sepa donde pedir /detect.
 bool applyStaticIpConfig() {
 #if CAMERA_USE_STATIC_IP
   IPAddress localIp;
@@ -1011,6 +1052,7 @@ bool applyStaticIpConfig() {
 #endif
 }
 
+// Conecta al WiFi o levanta un AP de emergencia.
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -1050,6 +1092,7 @@ void connectWiFi() {
   Serial.println(WiFi.softAPIP());
 }
 
+// Reconexion WiFi sin cortar el loop durante mucho tiempo.
 void maintainWiFi() {
   static uint32_t lastReconnectAttemptMs = 0;
   if (networkMode != "wifi" || WiFi.status() == WL_CONNECTED) {
@@ -1064,6 +1107,7 @@ void maintainWiFi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
+// Comandos serie simples, de momento DETECT.
 void handleSerialCommand(const String &rawCommand) {
   String command = rawCommand;
   command.trim();
@@ -1074,6 +1118,7 @@ void handleSerialCommand(const String &rawCommand) {
   }
 }
 
+// Acumula una linea de Serial antes de procesarla.
 void handleSerialCommands() {
   static String command;
 
@@ -1094,6 +1139,7 @@ void handleSerialCommands() {
   }
 }
 
+// Actualiza deteccion en segundo plano para que /status tenga datos recientes.
 void updateBackgroundDetection() {
   if (!cameraReady) {
     recoverCameraIfNeeded();
@@ -1107,6 +1153,7 @@ void updateBackgroundDetection() {
   captureAndUpdateSign();
 }
 
+// Log opcional para diagnosticar alimentacion, FPS y frames corruptos.
 void logCameraDiagnostics(bool force = false) {
 #if CAMERA_DIAGNOSTIC_LOGS
   if (!force && millis() - lastDiagnosticLogMs < CAMERA_DIAGNOSTIC_INTERVAL_MS) {
@@ -1136,6 +1183,7 @@ void logCameraDiagnostics(bool force = false) {
 #endif
 }
 
+// Registra endpoints HTTP y arranca el servidor de streaming.
 void setupServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleStatus);
@@ -1147,6 +1195,7 @@ void setupServer() {
   streamServer.setNoDelay(true);
 }
 
+// Arranque completo de red, camara y endpoints.
 void setup() {
   // During standalone camera tests, Serial shows the IP. When wired to the robot,
   // ignore boot messages and use only DETECT responses after startup.
@@ -1159,6 +1208,7 @@ void setup() {
   reportSign(true);
 }
 
+// Loop corto: HTTP, stream, Serial, WiFi y deteccion de fondo.
 void loop() {
   server.handleClient();
   handleDedicatedStreamServer();

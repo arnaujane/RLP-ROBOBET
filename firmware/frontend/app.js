@@ -29,6 +29,7 @@ const GRAPH_REVERSE_ORIENTATION = {
   WEST: "EAST",
 };
 
+// Estado unico de la pantalla. Todo renderiza desde aqui para evitar desajustes.
 const state = {
   backendOnline: false,
   wsOnline: false,
@@ -76,6 +77,7 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+// Detecta si la web esta servida por el backend o abierta en local.
 function getApiBase() {
   const stored = localStorage.getItem("robobet_api_base");
   if (stored) return stored.replace(/\/$/, "");
@@ -116,6 +118,7 @@ async function api(path, options = {}) {
   }
 }
 
+// Carga datos sin romper la pantalla si una API no esta disponible.
 async function safeLoad(label, task) {
   try {
     await task();
@@ -173,6 +176,7 @@ function formatTime(ms = 0) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${tenths}`;
 }
 
+// Normaliza telemetria para aceptar nombres del firmware y del backend.
 function normalizeRobot(raw = {}) {
   const cameraSign = raw.camera_sign || raw.cameraSign || state.robot.camera_sign || "NO_SIGN";
   return {
@@ -196,6 +200,7 @@ function normalizeRobot(raw = {}) {
   };
 }
 
+// Actualiza el robot y redibuja todo lo dependiente de su estado.
 function updateRobot(raw = {}) {
   state.robot = normalizeRobot(raw);
 
@@ -275,6 +280,7 @@ function getAlgorithmPhase(robot = state.robot) {
   return "En espera";
 }
 
+// Usa valores reales si llegan; si no, deja que la simulacion mantenga la UI viva.
 function hasRobotSensorValues() {
   return Boolean(
     state.robot.sensor_values ||
@@ -328,6 +334,7 @@ function synthesizeSensorValues(robot = state.robot) {
   });
 }
 
+// Estimacion visual de potencia para los indicadores de motores.
 function getMotorPower(robot = state.robot) {
   const rawLeft = robot.motor_left_percent ?? robot.motorLeftPercent ?? robot.left_motor ?? robot.leftMotor;
   const rawRight = robot.motor_right_percent ?? robot.motorRightPercent ?? robot.right_motor ?? robot.rightMotor;
@@ -369,6 +376,7 @@ function getMotorPower(robot = state.robot) {
   ];
 }
 
+// Dibuja los 8 QTR y marca si el PID esta protegido.
 function renderSensorBoard() {
   const threshold = Number(state.robot.threshold || DEFAULT_QTR_THRESHOLD);
   const values = parseSensorValues();
@@ -409,6 +417,7 @@ function renderMotorPower() {
   badge.classList.toggle("limited", speedLimit <= 80);
 }
 
+// Dibuja el grafo aprendido por el robot: nodos, aristas y salidas pendientes.
 function renderMazeGraph() {
   const svg = $("mazeGraph");
   if (!svg) return;
@@ -572,6 +581,7 @@ function renderMazeGraph() {
   svg.innerHTML = `${defs}${edgeMarkup}${exitMarkup}${nodeMarkup}`;
 }
 
+// Refleja la ultima deteccion de la ESP32-CAM o del modo manual.
 function renderCamera() {
   const sign = state.camera.sign || state.robot.camera_sign || "NO_SIGN";
   const confidence = Number(state.camera.confidence ?? state.robot.camera_confidence ?? 0);
@@ -591,6 +601,7 @@ function renderCamera() {
   setText("robotCameraState", sign);
 }
 
+// Rellena las tarjetas principales del dashboard tecnico.
 function renderRobotStatus() {
   const robot = state.robot;
   const label = getRobotStateLabel(robot);
@@ -676,6 +687,7 @@ function renderRobotStatus() {
   if (disableObstaclesButton) disableObstaclesButton.disabled = !obstacleHandlingEnabled;
 }
 
+// Redibujado central para evitar renders parciales inconsistentes.
 function renderDashboard() {
   renderSourceBadges();
   renderRobotStatus();
@@ -707,11 +719,13 @@ function cameraQualityLabel(camera = state.camera) {
   return "Estable";
 }
 
+// Estado seguro cuando la camara no responde.
 function setCameraOffline(reason = "Sin respuesta") {
   state.camera = { online: false, sign: "NO_SIGN", confidence: 0, reason, votes: {} };
   renderCamera();
 }
 
+// Fusiona respuesta de camara con el estado local.
 function updateCameraResult(payload, online = true) {
   state.camera = {
     ...state.camera,
@@ -740,6 +754,7 @@ async function refreshCameraStatus() {
   }
 }
 
+// Prueba manual de deteccion desde el boton del panel.
 async function testCameraDetection() {
   setText("cameraReason", "detectando");
   try {
@@ -752,6 +767,7 @@ async function testCameraDetection() {
   }
 }
 
+// Mantiene datos visuales cuando no hay backend o robot conectado.
 function simulateCamera() {
   const signs = ["NO_SIGN", "NO_SIGN", "GREEN_SIGN", "NO_SIGN", "RED_SIGN", "BLACK_SIGN"];
   const sign = signs[state.simulation.cameraIndex % signs.length];
@@ -768,12 +784,14 @@ function simulateCamera() {
   );
 }
 
+// Estado actual de carrera, robot y run activo.
 async function refreshState() {
   const payload = await api("/api/run/state");
   state.run = payload.run || null;
   updateRobot(payload.robot || {});
 }
 
+// Historial real desde backend, con fallback visual si no hay API.
 async function loadHistory() {
   const history = await api("/api/run/history");
   state.history = history;
@@ -856,6 +874,7 @@ async function loadUsers() {
   if (state.user) await safeLoad("Detalle usuario", loadUserDetail);
 }
 
+// Ranking y usuario activo comparten la misma lista actualizada.
 function renderUsers() {
   $("ranking").innerHTML = state.users
     .slice()
@@ -894,6 +913,7 @@ async function loadUserDetail() {
   renderUserActivity();
 }
 
+// Ultimas votaciones/apuestas del usuario visible.
 function renderUserActivity() {
   const element = $("userActivity");
   if (!element) return;
@@ -912,6 +932,7 @@ function renderUserActivity() {
     : "Sin actividad registrada";
 }
 
+// Crea usuario local o vinculado luego a Twitch.
 async function createUser() {
   const name = $("userName").value.trim();
   if (!name) return;
@@ -934,6 +955,7 @@ function renderBets() {
   renderUserActivity();
 }
 
+// Cambia opciones segun el tipo de apuesta elegido.
 function updateBetChoices() {
   const kind = $("betKind").value;
   const choices = {
@@ -945,6 +967,7 @@ function updateBetChoices() {
   $("betChoice").innerHTML = choices.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
 }
 
+// Registra apuesta y refresca puntos/historial del usuario.
 async function placeBet() {
   if (!state.user) return setOperatorMessage("Crea un usuario antes de apostar");
   await api("/api/bets", {
@@ -980,6 +1003,7 @@ function pollLeader(poll) {
   return results[0]?.choice || null;
 }
 
+// Tarjeta reutilizable para resumen de votaciones.
 function voteCardMarkup({ label, stateText, tone, choice, meta }) {
   return `
     <div class="vote-card">
@@ -993,6 +1017,7 @@ function voteCardMarkup({ label, stateText, tone, choice, meta }) {
   `;
 }
 
+// Resume una votacion de obstaculo con el comando de Twitch esperado.
 function obstacleVoteCardMarkup(slot) {
   const poll = latestPollForKinds([`obstacle_${slot}`]);
   if (!poll) {
@@ -1022,6 +1047,7 @@ function obstacleVoteCardMarkup(slot) {
   });
 }
 
+// Resume que algoritmo ha votado el publico.
 function algorithmVoteCardMarkup() {
   const poll = latestPollForKinds(["algorithm"]);
   if (!poll) {
@@ -1124,6 +1150,7 @@ function renderPolls() {
   renderPollList("userPolls", { closable: false, votable: false });
 }
 
+// Plantillas rapidas para no escribir encuestas a mano durante la demo.
 async function createPollFromTemplate(kind) {
   const templates = {
     algorithm: { kind: "algorithm", title: "Algoritmo de la proxima carrera", options: ["DFS", "BFS"] },
@@ -1135,6 +1162,7 @@ async function createPollFromTemplate(kind) {
   await loadPolls();
 }
 
+// Gestiona votos de usuario y cierre de encuestas desde botones.
 async function handlePollClick(event) {
   const vote = event.target.dataset.vote;
   const close = event.target.dataset.closePoll;
@@ -1150,6 +1178,7 @@ async function handlePollClick(event) {
   }
 }
 
+// Comandos principales de carrera.
 async function startRun() {
   await api("/api/run/start", {
     method: "POST",
@@ -1178,6 +1207,7 @@ async function calibrateQtr() {
   setOperatorMessage("Calibracion solicitada");
 }
 
+// Permite pausar en cruces para comprobar decision y grafo.
 async function setTurnPause(enabled) {
   await api("/api/operator/command", {
     method: "POST",
@@ -1202,6 +1232,7 @@ async function setObstacleHandling(enabled) {
   await refreshState();
 }
 
+// Ajuste vivo del PWM base, util cuando cambia la bateria.
 async function setDrivePower(percent) {
   const safePercent = Math.max(5, Math.min(100, Number(percent) || 11));
   await api("/api/operator/command", {
@@ -1231,6 +1262,7 @@ async function loadStreamDefaults() {
   $("overheadUrl").placeholder = STREAM_DEFAULTS.overhead;
 }
 
+// Evita quedarse con URLs antiguas de pruebas anteriores.
 function getStoredStreamUrl(storageKey, defaultUrl, staleUrls = new Set()) {
   const stored = localStorage.getItem(storageKey);
   if (!stored || staleUrls.has(stored)) {
@@ -1254,6 +1286,7 @@ function frontStreamMode(url) {
   }
 }
 
+// Convierte una URL de stream en endpoint de control de la misma camara.
 function cameraControlUrl(url, path = "/snapshot") {
   try {
     const parsed = new URL(url);
@@ -1319,6 +1352,7 @@ function activeFrontTarget() {
     : { imageId: "frontStream", statusId: "frontStatus", idleImageId: "userFrontStream", idleStatusId: "userFrontStatus" };
 }
 
+// Fallback de baja latencia: snapshots encadenados si MJPEG falla.
 function startFrontSnapshotLoop(url) {
   stopStreamTimer("front");
   clearFrontImages();
@@ -1409,6 +1443,7 @@ function startFrontMjpegStream(url) {
   activeImage.src = withCacheBust(url);
 }
 
+// Decide entre MJPEG directo y snapshots segun la URL configurada.
 function startFrontStream(url) {
   if (frontStreamMode(url) === "mjpeg") {
     startFrontMjpegStream(url);
@@ -1417,6 +1452,7 @@ function startFrontStream(url) {
   startFrontSnapshotLoop(url);
 }
 
+// Aplica las URLs de camara guardadas y reinicia streams.
 function applyStreams() {
   const front = normalizeFrontCameraUrl(getStoredStreamUrl("robobet_front_url", STREAM_DEFAULTS.front, STALE_FRONT_URLS));
   const overhead = getStoredStreamUrl("robobet_overhead_url", STREAM_DEFAULTS.overhead);
@@ -1441,6 +1477,7 @@ function configureStreamFeedback() {
   });
 }
 
+// WebSocket de eventos en vivo desde backend.
 function connectWs() {
   let ws;
   try {
@@ -1493,6 +1530,7 @@ function switchView(view) {
   }
 }
 
+// Guarda el token OAuth que devuelve Twitch en el hash de la URL.
 function parseTwitchHash() {
   if (!location.hash.includes("access_token")) return;
   const params = new URLSearchParams(location.hash.slice(1));
@@ -1501,6 +1539,7 @@ function parseTwitchHash() {
   history.replaceState(null, "", location.pathname + location.search);
 }
 
+// Si no hay client_id configurado, deja una sesion demo para la presentacion.
 async function handleTwitchLogin() {
   const clientId = localStorage.getItem("robobet_twitch_client_id");
   const redirectUri = `${location.origin}${location.pathname}`;
@@ -1526,6 +1565,7 @@ async function handleTwitchLogin() {
   await safeLoad("Usuario Twitch demo", syncTwitchUser);
 }
 
+// Valida token de Twitch en backend y vincula usuario si existe.
 async function loadTwitchProfile() {
   parseTwitchHash();
   const token = localStorage.getItem("robobet_twitch_token");
@@ -1553,6 +1593,7 @@ async function loadTwitchProfile() {
   renderTwitchChat();
 }
 
+// Crea o recupera el usuario asociado a Twitch.
 async function syncTwitchUser() {
   if (!state.twitch) return;
   const login = state.twitch.login || state.twitch.display_name || "twitch_demo";
@@ -1570,6 +1611,7 @@ async function syncTwitchUser() {
   await Promise.all([loadUsers(), loadUserDetail()]);
 }
 
+// Pinta avatar, sesion y acceso al chat embebido.
 function renderTwitch() {
   const avatar = $("twitchAvatar");
   const login = $("twitchLogin");
@@ -1618,6 +1660,7 @@ function getTwitchChannel() {
   return stored;
 }
 
+// Twitch exige declarar dominios parent para poder embeber el chat.
 function twitchParents() {
   const parents = new Set();
   const host = location.hostname || "localhost";
@@ -1661,6 +1704,7 @@ function applyTwitchChannel() {
   renderTwitchChat();
 }
 
+// Simulacion suave para que la UI siga siendo demostrable sin robot.
 function tickSimulation() {
   state.simulation.tick += 1;
   const tick = state.simulation.tick;
@@ -1686,6 +1730,7 @@ function tickSimulation() {
   renderDashboard();
 }
 
+// Une todos los botones de la pantalla con sus acciones.
 function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
@@ -1747,6 +1792,7 @@ function bindEvents() {
   });
 }
 
+// Arranque ordenado: eventos, streams, websocket y datos iniciales.
 async function boot() {
   bindEvents();
   updateBetChoices();

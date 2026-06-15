@@ -132,6 +132,8 @@ static constexpr int DEFAULT_POSITION_GAIN = 10;
 static constexpr bool DEFAULT_LOCAL_MOTORS_ENABLED = false;
 static constexpr bool DEFAULT_OBSTACLE_HANDLING_ENABLED = false;
 
+// Estados principales del robot. Ayudan a que la web muestre en que parte
+// del recorrido esta: seguimiento, cruce, giro, obstaculo o vuelta atras.
 enum class RobotState {
   IDLE,
   CALIBRATING,
@@ -206,6 +208,8 @@ enum DirectionBit : uint8_t {
   DIR_BACK = 0b1000
 };
 
+// Foto completa de los QTR en un instante. Se guarda tanto el valor crudo
+// como la lectura ya clasificada en izquierda, centro, derecha u obstaculo.
 struct SensorFrame {
   uint16_t raw[QTR_COUNT]{};
   uint16_t normalized[QTR_COUNT]{};
@@ -224,6 +228,8 @@ struct SensorFrame {
   int position = 3500;
 };
 
+// Cada nodo guarda salidas absolutas. Asi el backtracking no depende de como
+// este orientado el robot al volver a pasar por el mismo cruce.
 struct NodeRecord {
   int8_t id = -1;
   int16_t x = 0;
@@ -240,6 +246,8 @@ struct NodeRecord {
   bool finalNode = false;
 };
 
+// Las aristas son las conexiones reales del laberinto: normales, verdes o
+// bloqueadas por una senal roja.
 struct EdgeRecord {
   int8_t from = -1;
   int8_t to = -1;
@@ -448,6 +456,7 @@ const char *cameraTransportName() {
 #endif
 }
 
+// Conversiones entre giros relativos y orientacion absoluta del grafo.
 uint8_t turnToBit(Turn turn) {
   switch (turn) {
     case Turn::LEFT: return DIR_LEFT;
@@ -480,6 +489,7 @@ RobotOrientation orientationFromIndex(uint8_t index) {
   return static_cast<RobotOrientation>(index % 4);
 }
 
+// Gira la orientacion actual sin mover todavia el robot fisico.
 RobotOrientation rotateOrientation(RobotOrientation orientation, Turn turn) {
   int index = static_cast<int>(orientationIndex(orientation));
   switch (turn) {
@@ -522,6 +532,7 @@ Turn turnTowardOrientation(RobotOrientation facing, RobotOrientation target) {
   return Turn::BACK;
 }
 
+// Pasa salidas detectadas por el QTR a coordenadas del mapa.
 uint8_t relativeOptionsToAbsolute(uint8_t relativeOptions, RobotOrientation facing) {
   uint8_t absoluteOptions = 0;
   const Turn turns[] = {Turn::LEFT, Turn::STRAIGHT, Turn::RIGHT, Turn::BACK};
@@ -536,6 +547,7 @@ uint8_t relativeOptionsToAbsolute(uint8_t relativeOptions, RobotOrientation faci
   return absoluteOptions;
 }
 
+// Vuelve a expresar salidas del grafo como izquierda/recto/derecha.
 uint8_t absoluteOptionsToRelative(uint8_t absoluteOptions, RobotOrientation facing) {
   uint8_t relativeOptions = 0;
   const Turn turns[] = {Turn::LEFT, Turn::STRAIGHT, Turn::RIGHT, Turn::BACK};
@@ -581,15 +593,18 @@ String absoluteExitMaskText(uint8_t mask) {
   return text.length() ? text : "-";
 }
 
+// El robot solo mueve motores si hay una carrera activa o modo local.
 bool motorsAllowed() {
   return runActive || localMotorsEnabled;
 }
 
+// Mantiene vivos el servidor local y el websocket durante esperas largas.
 void serviceNetwork() {
   localServer.handleClient();
   webSocket.loop();
 }
 
+// Normaliza respuestas de camara o botones manuales a un enum interno.
 bool parseCameraSign(const String &text, CameraSign &sign) {
   String value = text;
   value.trim();
@@ -624,6 +639,7 @@ void setCameraDiagnostics(uint8_t confidence, const String &reason) {
   lastCameraReason = reason;
 }
 
+// Pide una lectura puntual al endpoint /detect de la ESP32-CAM.
 CameraSign requestCameraSignHttp() {
 #if CAMERA_TRANSPORT_HTTP
   WiFiClient client;
@@ -669,6 +685,7 @@ CameraSign requestCameraSignHttp() {
 #endif
 }
 
+// Variante por UART para cuando la camara quede cableada al robot.
 CameraSign requestCameraSignUart() {
 #if CAMERA_TRANSPORT_UART
   while (CameraSerial.available()) {
@@ -727,6 +744,7 @@ CameraSign requestCameraSign() {
 #endif
 }
 
+// Punto unico de decision para obstaculos, da igual si viene por HTTP o UART.
 CameraSign requestObstacleSign() {
   if (manualObstacleSignEnabled) {
     setCameraDiagnostics(100, "manual_obstacle_override");
@@ -744,6 +762,7 @@ uint8_t currentDrivePowerPercent() {
   return pwmPercent(basePwm);
 }
 
+// Empaqueta el grafo para que el dashboard pueda dibujar nodos y aristas.
 void addGraphDiagnostics(JsonDocument &doc) {
   JsonArray graphNodes = doc["graph_nodes"].to<JsonArray>();
   for (uint8_t i = 0; i < nodeCount; i++) {
@@ -773,6 +792,7 @@ void addGraphDiagnostics(JsonDocument &doc) {
   }
 }
 
+// Telemetria extra de sensores, mapa y flags de navegacion.
 void addLiveDiagnostics(JsonDocument &doc) {
   JsonArray sensorValues = doc["sensor_values"].to<JsonArray>();
   JsonArray sensorActive = doc["sensor_active"].to<JsonArray>();
@@ -830,6 +850,7 @@ void addLiveDiagnostics(JsonDocument &doc) {
   addGraphDiagnostics(doc);
 }
 
+// Envia eventos con contexto suficiente para depurar desde la web.
 void sendEvent(const char *event, JsonDocument *extra = nullptr) {
   JsonDocument doc;
   doc["event"] = event;
@@ -857,6 +878,7 @@ void sendEvent(const char *event, JsonDocument *extra = nullptr) {
   }
 }
 
+// Escribe PWM y direccion respetando la inversion fisica de cada motor.
 void setMotorRaw(uint8_t pwmChannel, uint8_t in1, uint8_t in2, int pwm, bool invert) {
   int value = constrain(pwm, -PWM_MAX, PWM_MAX);
   if (invert) {
@@ -904,6 +926,7 @@ void setupMotors() {
   stopMotors();
 }
 
+// Lee el tiempo de descarga de cada sensor QTR.
 void readQtrRaw(uint16_t values[QTR_COUNT]) {
   for (uint8_t i = 0; i < QTR_COUNT; i++) {
     pinMode(QTR_PINS[i], OUTPUT);
@@ -941,6 +964,7 @@ bool anyLineDetected(const SensorFrame &frame) {
   return frame.lineSeen;
 }
 
+// Calcula si la linea queda a la izquierda, centro o derecha.
 int getLineDirection(const SensorFrame &frame) {
   if (!frame.lineSeen) {
     return lastKnownDirection;
@@ -957,10 +981,12 @@ int getLineDirection(const SensorFrame &frame) {
   return 0;
 }
 
+// Detecta patrones laterales que pueden ser cruce, no simple correccion PID.
 bool hasSideEventCandidate(const SensorFrame &frame) {
   return frame.center && (frame.left || frame.right || frame.blackPatch);
 }
 
+// Protege el seguimiento cuando una rama lateral aparece de golpe.
 bool shouldProtectLineTracking(const SensorFrame &frame) {
   return frame.lineSeen && hasSideEventCandidate(frame);
 }
@@ -983,6 +1009,7 @@ bool backtrackingSideNodeCandidate(const SensorFrame &frame) {
   return leftBranchCandidate || rightBranchCandidate;
 }
 
+// En backtracking, una rama lateral fuerte se trata como nodo aunque no sature todo.
 void promoteBacktrackingNodeCandidate(SensorFrame &frame) {
   if (!backtrackingSideNodeCandidate(frame)) {
     return;
@@ -999,6 +1026,7 @@ void promoteBacktrackingNodeCandidate(SensorFrame &frame) {
   }
 }
 
+// Mantiene vivo un candidato de cruce durante unos milisegundos.
 void holdNodeCandidateDuringConfirmation(const SensorFrame &frame) {
   if (knownBacktrackingActive()) {
     // Si seguimos corrigiendo aqui, el robot puede pasar de largo el cruce.
@@ -1009,6 +1037,7 @@ void holdNodeCandidateDuringConfirmation(const SensorFrame &frame) {
   followLine(frame);
 }
 
+// Media ponderada de sensores, limitada si estamos protegiendo el PID.
 int computeLinePositionInRange(const SensorFrame &frame, uint8_t minIndex, uint8_t maxIndex) {
   int lastIndex = constrain(lastLinePosition / 1000, static_cast<int>(minIndex), static_cast<int>(maxIndex));
   int nearestIndex = -1;
@@ -1047,6 +1076,7 @@ int computeLinePositionInRange(const SensorFrame &frame, uint8_t minIndex, uint8
   return total > 0 ? static_cast<int>(weighted / total) : lastLinePosition;
 }
 
+// Clasifica una lectura QTR completa para seguimiento, cruces y obstaculos.
 SensorFrame readSensors() {
   SensorFrame frame;
   readQtrRaw(frame.raw);
@@ -1117,6 +1147,7 @@ SensorFrame readSensors() {
   return frame;
 }
 
+// Guarda la ultima lectura para telemetria y panel de sensores.
 void storeLastSensorFrame(const SensorFrame &frame) {
   for (uint8_t i = 0; i < QTR_COUNT; i++) {
     lastSensorValues[i] = frame.raw[i];
@@ -1125,6 +1156,7 @@ void storeLastSensorFrame(const SensorFrame &frame) {
   lastLineTrackingProtected = frame.lineTrackingProtected;
 }
 
+// Baja el umbral si se pierde la linea y lo recupera al volver a verla.
 void updateAdaptiveThreshold(const SensorFrame &frame) {
   if (frame.lineSeen) {
     if (currentLineThresholdRaw < targetLineThresholdRaw) {
@@ -1138,6 +1170,7 @@ void updateAdaptiveThreshold(const SensorFrame &frame) {
   }
 }
 
+// Recuerda por donde estaba la linea para poder buscarla si se pierde.
 void updateLineMemory(const SensorFrame &frame) {
   if (!frame.lineSeen || frame.blackPatch) {
     return;
@@ -1147,6 +1180,7 @@ void updateLineMemory(const SensorFrame &frame) {
   lastKnownPosition = static_cast<float>(frame.position) / 1000.0f;
 }
 
+// Calibracion rapida leyendo minimos y maximos de cada QTR.
 void calibrateQtr() {
   robotState = RobotState::CALIBRATING;
   sendEvent("CALIBRATION_STARTED");
@@ -1172,6 +1206,7 @@ void calibrateQtr() {
   sendEvent("CALIBRATION_DONE");
 }
 
+// Confirma si hay salida recta despues de centrar el eje de ruedas.
 bool straightExitConfirmedFromFrame(const SensorFrame &frame) {
   bool blackPatchBlocksStraight = frame.blackPatch && obstacleHandlingEnabled && !returningFromBlockedObstacle;
   return !blackPatchBlocksStraight &&
@@ -1180,6 +1215,7 @@ bool straightExitConfirmedFromFrame(const SensorFrame &frame) {
          frame.centerActiveCount >= STRAIGHT_CONFIRM_MIN_CENTER_SENSORS;
 }
 
+// Convierte la foto del cruce en salidas disponibles.
 uint8_t optionsFromFrame(const SensorFrame &frame, bool includeStraight) {
   if (frame.blackPatch && obstacleHandlingEnabled && !returningFromBlockedObstacle) {
     return 0;
@@ -1198,6 +1234,7 @@ uint8_t optionsFromFrame(const SensorFrame &frame, bool includeStraight) {
   return options;
 }
 
+// DFS prioriza profundizar antes de volver a otras salidas.
 Turn chooseDfsTurn(NodeRecord &node) {
   const Turn priority[] = {Turn::RIGHT, Turn::LEFT, Turn::STRAIGHT, Turn::BACK};
   for (Turn turn : priority) {
@@ -1219,6 +1256,7 @@ Turn chooseDfsTurn(NodeRecord &node) {
   return Turn::BACK;
 }
 
+// BFS prioriza avance por niveles usando recto antes que ramas laterales.
 Turn chooseBfsTurn(NodeRecord &node) {
   const Turn priority[] = {Turn::STRAIGHT, Turn::RIGHT, Turn::LEFT, Turn::BACK};
   for (Turn turn : priority) {
@@ -1240,6 +1278,7 @@ Turn chooseBfsTurn(NodeRecord &node) {
   return Turn::BACK;
 }
 
+// Salidas aun no exploradas, ignorando vecinos que ya estan conectados.
 uint8_t untriedOptionsMask(int nodeId) {
   if (nodeId < 0 || nodeId >= nodeCount) {
     return 0;
@@ -1286,6 +1325,7 @@ bool chooseUntriedTurnAtNode(int nodeId, Turn &selected) {
   return false;
 }
 
+// Solo se puede navegar por aristas conocidas y no bloqueadas.
 bool edgeCanBeUsed(int from, RobotOrientation orientation) {
   if (from < 0 || from >= nodeCount) {
     return false;
@@ -1296,6 +1336,7 @@ bool edgeCanBeUsed(int from, RobotOrientation orientation) {
   return neighbor >= 0 && neighbor < nodeCount && !(nodes[from].blocked & bit);
 }
 
+// Busca ruta entre nodos conocidos para hacer backtracking estable.
 bool computePathToNode(int start, int target, int8_t parents[MAX_NODES]) {
   for (uint8_t i = 0; i < MAX_NODES; i++) {
     parents[i] = -1;
@@ -1390,6 +1431,7 @@ int findNearestFrontierNode(int start) {
   return -1;
 }
 
+// En DFS se vuelve al ultimo nodo con salidas pendientes.
 int findDfsFrontierNode(int start) {
   int8_t parents[MAX_NODES];
   for (int nodeId = static_cast<int>(nodeCount) - 1; nodeId >= 0; nodeId--) {
@@ -1447,6 +1489,7 @@ bool chooseNavigationTurn(int nodeId, Turn &selected, int &targetNode, int &next
   return true;
 }
 
+// Cuando ya estamos volviendo, seguimos solo aristas conocidas.
 bool chooseKnownPathTurnToTarget(int nodeId, int targetNode, Turn &selected, int &nextNode) {
   nextNode = -1;
   if (nodeId < 0 || nodeId >= nodeCount || targetNode < 0 || targetNode >= nodeCount || nodeId == targetNode) {
@@ -1477,6 +1520,7 @@ uint8_t knownRelativeOptionsForNode(int nodeId) {
   return options != 0 ? options : DIR_BACK;
 }
 
+// Limpia mapa, obstaculos y estado de navegacion para una carrera nueva.
 void resetMaze() {
   for (NodeRecord &node : nodes) {
     node = NodeRecord{};
@@ -1524,6 +1568,7 @@ void resetMaze() {
   setCameraDiagnostics(0, "not_checked");
 }
 
+// Avanza una celda logica del mapa en la orientacion indicada.
 void advanceNodeCoordinates(int16_t x, int16_t y, RobotOrientation orientation, int16_t &nextX, int16_t &nextY) {
   nextX = x;
   nextY = y;
@@ -1536,6 +1581,7 @@ void advanceNodeCoordinates(int16_t x, int16_t y, RobotOrientation orientation, 
   }
 }
 
+// Busca si ya existe un nodo en esas coordenadas del grafo.
 int findNodeAt(int16_t x, int16_t y) {
   for (uint8_t i = 0; i < nodeCount; i++) {
     if (nodes[i].x == x && nodes[i].y == y) {
@@ -1546,6 +1592,7 @@ int findNodeAt(int16_t x, int16_t y) {
   return -1;
 }
 
+// Crea un nodo nuevo con las salidas conocidas hasta ese momento.
 int createNodeAt(uint8_t absoluteOptions, int16_t x, int16_t y) {
   if (nodeCount >= MAX_NODES) {
     robotState = RobotState::ERROR_STATE;
@@ -1568,6 +1615,7 @@ int createNodeAt(uint8_t absoluteOptions, int16_t x, int16_t y) {
   return nodeCount++;
 }
 
+// Fusiona salidas nuevas sin borrar lo que ya se habia aprendido.
 void updateNodeOptions(int nodeId, uint8_t absoluteOptions) {
   if (nodeId < 0 || nodeId >= nodeCount) {
     return;
@@ -1596,6 +1644,7 @@ int findEdgeIndexBetween(int a, int b) {
   return -1;
 }
 
+// Conecta dos nodos en ambos sentidos y evita duplicados.
 void connectNodes(int from, int to, RobotOrientation fromOrientation) {
   if (from < 0 || to < 0 || from >= nodeCount || to >= nodeCount || from == to) {
     return;
@@ -1652,6 +1701,7 @@ void connectNodes(int from, int to, RobotOrientation fromOrientation) {
   }
 }
 
+// Marca una salida como bloqueada tras detectar senal roja.
 void markEdgeBlocked(int from, RobotOrientation fromOrientation) {
   if (from < 0 || from >= nodeCount) {
     return;
@@ -1680,6 +1730,7 @@ void markEdgeBlocked(int from, RobotOrientation fromOrientation) {
   }
 }
 
+// Guarda que una arista se puede cruzar porque la senal fue verde.
 void markCurrentTraversalPassableGreen() {
   if (currentNode < 0 || currentNode >= nodeCount) {
     return;
@@ -1713,6 +1764,7 @@ bool currentTraversalIsKnownGreen() {
   return (nodes[currentNode].passableGreen & bit) != 0;
 }
 
+// Resuelve si estamos creando nodo nuevo o llegando a uno ya conocido.
 int resolveCurrentNode(uint8_t relativeOptions) {
   bool arrivedFromEdge = edgeInProgress && previousNodeForEdge >= 0 && previousNodeForEdge < nodeCount;
   if (arrivedFromEdge) {
@@ -1764,6 +1816,7 @@ int resolveCurrentNode(uint8_t relativeOptions) {
   return currentNode;
 }
 
+// Empieza una arista: desde aqui el siguiente nodo cerrara la conexion.
 void beginTraversal(Turn selectedTurn) {
   if (currentNode < 0 || currentNode >= nodeCount) {
     return;
@@ -1782,6 +1835,7 @@ void beginTraversal(Turn selectedTurn) {
   edgeInProgress = true;
 }
 
+// Calcula el camino final desde el inicio hasta la senal negra.
 bool computeShortestPathToFinal() {
   shortestPathLength = 0;
   for (int8_t &pathNode : shortestPathNodes) {
@@ -1846,6 +1900,7 @@ bool computeShortestPathToFinal() {
   return true;
 }
 
+// Comprueba que el robot ha vuelto a quedar sobre el centro de la linea.
 bool lineCentered() {
   SensorFrame frame = readSensors();
   bool blackPatchBlocksCentering = frame.blackPatch && obstacleHandlingEnabled && !returningFromBlockedObstacle;
@@ -1889,6 +1944,7 @@ uint32_t msForDistance(float centimeters) {
   return static_cast<uint32_t>(centimeters * msPerCm);
 }
 
+// Movimiento temporizado, manteniendo telemetria y red activas.
 void driveFor(int left, int right, uint32_t durationMs) {
   uint32_t start = millis();
   setMotors(left, right);
@@ -1904,6 +1960,7 @@ void driveFor(int left, int right, uint32_t durationMs) {
   stopMotors();
 }
 
+// Avanza una distancia corta corrigiendo con la linea si la ve.
 void advanceFollowingLineCm(float centimeters) {
   uint32_t durationMs = msForDistance(centimeters);
   uint32_t start = millis();
@@ -1941,6 +1998,7 @@ void centerOnNode() {
   advanceFollowingLineCm(CENTER_ON_NODE_DISTANCE_CM);
 }
 
+// La media vuelta recibe margen extra porque depende mucho de bateria y rozamiento.
 uint32_t turnTimeoutMs(Turn turn, uint32_t targetMs) {
   uint32_t timeoutMs = targetMs + static_cast<uint32_t>(lineReacquireMs);
   if (turn != Turn::BACK) {
@@ -1955,6 +2013,7 @@ uint32_t turnTimeoutMs(Turn turn, uint32_t targetMs) {
   return backTimeoutMs > timeoutMs ? backTimeoutMs : timeoutMs;
 }
 
+// Giro guiado por sensores: primero busca el lateral y luego centra.
 void rotateForTurn(Turn turn) {
   if (turn == Turn::STRAIGHT) {
     return;
@@ -2032,6 +2091,7 @@ void rotateForTurn(Turn turn) {
   stopMotors();
 }
 
+// Aplica recto, izquierda, derecha o media vuelta en el mundo fisico.
 void performTurn(Turn turn) {
   if (turn == Turn::STRAIGHT) {
     robotState = RobotState::GO_STRAIGHT;
@@ -2051,6 +2111,7 @@ void performTurn(Turn turn) {
   advanceFollowingLineCm(NODE_EXIT_ADVANCE_CM);
 }
 
+// Ejecuta el giro que quedo pausado desde la web.
 void executePendingTurn() {
   if (!waitingForTurnConfirmation || currentNode < 0 || currentNode >= nodeCount) {
     return;
@@ -2070,6 +2131,7 @@ void executePendingTurn() {
   robotState = RobotState::FOLLOWING_LINE;
 }
 
+// Cierra la arista actual como bloqueada para no volver a intentarla.
 void markLastTurnBlocked() {
   if (currentNode < 0 || currentNode >= nodeCount) {
     return;
@@ -2084,6 +2146,7 @@ void markLastTurnBlocked() {
   previousNodeForEdge = -1;
 }
 
+// Evita que una lectura puntual saturada dispare un obstaculo falso.
 bool blackPatchConfirmed(const SensorFrame &frame) {
   if (!frame.blackPatch) {
     blackPatchFirstSeenMs = 0;
@@ -2098,6 +2161,7 @@ bool blackPatchConfirmed(const SensorFrame &frame) {
   return millis() - blackPatchFirstSeenMs >= BLACK_PATCH_CONFIRM_MS;
 }
 
+// Pasa por encima de una marca negra cuando la camara/manual dice verde.
 bool drivePastBlackPatch() {
   uint32_t start = millis();
   setMotors(basePwm, basePwm);
@@ -2119,6 +2183,7 @@ bool drivePastBlackPatch() {
   return false;
 }
 
+// Cierra la carrera y calcula la ruta cuando aparece la senal negra final.
 void finishRunFromCameraSign() {
   robotState = RobotState::FINISH_DETECTED;
   int finishedNode = resolveCurrentNode(0);
@@ -2135,6 +2200,7 @@ void finishRunFromCameraSign() {
   sendEvent("FINISH_DETECTED");
 }
 
+// Vuelve al nodo anterior despues de una senal roja.
 void backtrackFromBlockedObstacle() {
   returnNodeAfterBlockedObstacle = currentNode;
   blockedObstacleOrientation = lastTraversalOrientation;
@@ -2157,6 +2223,7 @@ void backtrackFromBlockedObstacle() {
   sendEvent("BACKTRACK_DONE");
 }
 
+// Aplica la decision de obstaculo, venga de camara o de botones manuales.
 void resolveObstacleSign(CameraSign sign, const char *source) {
   waitingForObstacleDecision = false;
   lastCameraSign = sign;
@@ -2193,6 +2260,7 @@ void resolveObstacleSign(CameraSign sign, const char *source) {
   backtrackFromBlockedObstacle();
 }
 
+// Pausa el robot para que el operador decida rojo, verde o negro.
 void waitForObstacleDecision() {
   waitingForObstacleDecision = true;
   manualObstacleSignEnabled = false;
@@ -2208,6 +2276,7 @@ void waitForObstacleDecision() {
   sendEvent("OBSTACLE_WAITING_DECISION", &extra);
 }
 
+// Entrada principal para una mancha negra tratada como obstaculo.
 void handleObstaclePatch() {
   stopMotors();
   robotState = RobotState::OBSTACLE_CHECK;
@@ -2235,6 +2304,7 @@ void handleObstaclePatch() {
   resolveObstacleSign(requestObstacleSign(), "camera_auto");
 }
 
+// Gestiona un cruce completo: leer salidas, actualizar grafo y elegir giro.
 void handleNode(const SensorFrame &frame) {
   if (!runActive) {
     return;
@@ -2250,6 +2320,7 @@ void handleNode(const SensorFrame &frame) {
   lastIntersectionType = frame.intersectionType;
   uint8_t entrySideOptions = optionsFromFrame(frame, false);
 
+  // Primero se centra el eje de ruedas; solo despues se confirma si hay recto.
   centerOnNode();
 
   SensorFrame centeredFrame = readSensors();
@@ -2292,6 +2363,7 @@ void handleNode(const SensorFrame &frame) {
   sendEvent("NODE_EXITS_CLASSIFIED", &classifyExtra);
 
   if (returningToKnownNode) {
+    // Tras una senal roja sabemos que este es el nodo anterior, aunque el QTR sature.
     currentNode = returnNodeAfterBlockedObstacle;
     bool saturatedReturnNode = frame.blackPatch || centeredFrame.blackPatch;
     lastAvailableExits = knownRelativeOptionsForNode(currentNode);
@@ -2312,6 +2384,7 @@ void handleNode(const SensorFrame &frame) {
     returnedExtra["absolute_options"] = absoluteExitMaskText(nodes[currentNode].options);
     sendEvent("RETURNED_TO_NODE_AFTER_BLOCKED_OBSTACLE", &returnedExtra);
   } else if (followingKnownPath) {
+    // Durante backtracking se confia en el grafo, no en salidas nuevas del QTR.
     int expectedNode = navigationNextNode;
 
     if (edgeInProgress && previousNodeForEdge >= 0 && previousNodeForEdge < nodeCount) {
@@ -2360,6 +2433,7 @@ void handleNode(const SensorFrame &frame) {
   bool selectedKnownPath = false;
 
   if (navigatingToFrontier && navigationTargetNode >= 0 && currentNode != navigationTargetNode) {
+    // Si vamos hacia una frontera, seguimos el camino conocido paso a paso.
     selectedTargetNode = navigationTargetNode;
     if (!chooseKnownPathTurnToTarget(currentNode, navigationTargetNode, selected, selectedNextNode)) {
       stopMotors();
@@ -2411,6 +2485,7 @@ void handleNode(const SensorFrame &frame) {
   sendEvent("EDGE_SELECTED", &extra);
 
   if (pauseBeforeTurnEnabled) {
+    // Modo de pruebas: deja ver la decision antes de mover el robot.
     pendingTurn = selected;
     pendingExitOrientation = selectedOrientation;
     waitingForTurnConfirmation = true;
@@ -2441,6 +2516,7 @@ bool tryBridgeWhiteGap() {
   return frame.lineSeen;
 }
 
+// Busca la linea usando la ultima direccion fiable que recordamos.
 bool searchForLineRecovery() {
   isSearching = true;
   searchStartMs = millis();
@@ -2472,6 +2548,7 @@ bool searchForLineRecovery() {
   return false;
 }
 
+// Decide si se intenta salvar un hueco o buscar la linea.
 void handleLineLost() {
   stopMotors();
   robotState = RobotState::OBSTACLE_CHECK;
@@ -2504,6 +2581,7 @@ void handleLineLost() {
   backtrackFromBlockedObstacle();
 }
 
+// PID simple de seguimiento sobre la posicion calculada por los QTR.
 void followLine(const SensorFrame &frame) {
   float error = (frame.position - 3500) / 1000.0f;
   int correction = static_cast<int>(error * positionGain);
@@ -2512,6 +2590,7 @@ void followLine(const SensorFrame &frame) {
   setMotors(left, right);
 }
 
+// Estado periodico para backend y dashboard.
 void sendTelemetry() {
   if (millis() - lastTelemetryMs < TELEMETRY_INTERVAL_MS) {
     return;
@@ -2538,6 +2617,7 @@ void sendTelemetry() {
   }
 }
 
+// Traduce comandos del backend a acciones reales del robot.
 void applyCommand(const JsonDocument &doc) {
   const char *type = doc["type"] | "";
   if (strcmp(type, "START_RUN") == 0) {
@@ -2691,6 +2771,7 @@ void applyCommand(const JsonDocument &doc) {
   }
 }
 
+// Recibe comandos y confirma conexion con el backend por WebSocket.
 void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   if (type == WStype_CONNECTED) {
     wsConnected = true;
@@ -2706,6 +2787,7 @@ void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   }
 }
 
+// Texto compacto para la pagina local de diagnostico QTR.
 String buildLineMap() {
   String mapText;
   for (uint8_t i = 0; i < QTR_COUNT; i++) {
@@ -2761,6 +2843,7 @@ String buildQtrRawListJson(const uint16_t values[QTR_COUNT]) {
   return json;
 }
 
+// Lectura digital auxiliar para comprobar cableado de los QTR.
 void readQtrDigitalLevels(uint8_t levels[QTR_COUNT]) {
   for (uint8_t i = 0; i < QTR_COUNT; i++) {
     pinMode(QTR_PINS[i], INPUT);
@@ -2772,6 +2855,7 @@ void readQtrDigitalLevels(uint8_t levels[QTR_COUNT]) {
   }
 }
 
+// Restaura parametros de prueba sin cambiar constantes de compilacion.
 void resetDefaults() {
   basePwm = DEFAULT_BASE_PWM;
   turnPwm = DEFAULT_TURN_PWM;
@@ -2803,6 +2887,7 @@ void resetDefaults() {
   stopMotors();
 }
 
+// Pagina local minima; el panel principal vive en el frontend.
 String buildControlPage() {
   return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>RoboBet AP</title><style>html,body{margin:0;height:100%;background:#ffffff;}</style></head><body></body></html>";
 }
@@ -2812,6 +2897,7 @@ void handleRoot() {
   localServer.send(200, "text/html", buildControlPage());
 }
 
+// Endpoint local para diagnosticar si cada sensor carga y descarga.
 void handleQtrDebug() {
   if (runActive) {
     localServer.send(409, "application/json", "{\"error\":\"stop_robot_before_qtr_debug\"}");
@@ -2859,6 +2945,7 @@ void handleQtrDebug() {
   localServer.send(200, "application/json", json);
 }
 
+// Activa AP propio y, si puede, tambien se une al WiFi del proyecto.
 void connectWiFi() {
   Serial.println("[BOOT] Configurando modo AP+STA");
   WiFi.mode(WIFI_AP_STA);
@@ -2888,18 +2975,21 @@ void connectWiFi() {
   }
 }
 
+// Canal de control principal con el backend.
 void setupWebSocket() {
   webSocket.begin(ROBOBET_SERVER_HOST, ROBOBET_SERVER_PORT, "/ws/robot");
   webSocket.onEvent(onWebSocketEvent);
   webSocket.setReconnectInterval(3000);
 }
 
+// Servidor local para pruebas rapidas desde 192.168.4.1.
 void setupLocalUi() {
   localServer.on("/", handleRoot);
   localServer.on("/qtr-debug", handleQtrDebug);
   localServer.begin();
 }
 
+// Prepara el transporte de camara que este activado por macros.
 void setupCameraTransport() {
 #if CAMERA_TRANSPORT_UART
   CameraSerial.begin(CAMERA_UART_BAUD, SERIAL_8N1, CAMERA_UART_RX, CAMERA_UART_TX);
@@ -2918,6 +3008,7 @@ void setupCameraTransport() {
 #endif
 }
 
+// Inicializa motores, red, camara y estado base.
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -2943,6 +3034,7 @@ void setup() {
   Serial.println("[BOOT] Robot en WAITING_START");
 }
 
+// Bucle principal: red, sensores, obstaculos, cruces y seguimiento.
 void loop() {
   serviceNetwork();
   sendTelemetry();
